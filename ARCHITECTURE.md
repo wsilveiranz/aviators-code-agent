@@ -4,6 +4,74 @@
 
 The Logic Apps Aviators Newsletter Agent is an AI-powered application that automates the creation of the Logic Apps Aviators Newsletter. It uses Azure OpenAI (GPT-5.2) as the reasoning engine, with a modular skill and tool architecture that enables the LLM to gather data from multiple sources and generate formatted HTML content.
 
+## Tech Stack
+
+### Agent Core & AI
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| **LLM Provider** | Azure OpenAI (GPT-5.2) | Reasoning engine for orchestration and content generation |
+| **OpenAI SDK** | `openai` v6.17.0 | Azure OpenAI client with function calling support |
+| **MCP SDK** | `@modelcontextprotocol/sdk` v1.25.3 | Model Context Protocol for tool integration |
+
+### Backend
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| **Runtime** | Node.js 18+ | Server-side JavaScript execution |
+| **Web Framework** | Express 5.x | REST API and SSE streaming endpoints |
+| **Environment** | dotenv | Secure configuration management |
+
+### Frontend
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| **UI Framework** | React 19 | Component-based user interface |
+| **Build Tool** | Vite 7.x | Fast development server and bundler |
+| **Styling** | CSS (custom) | Tech Community-inspired preview styling |
+
+### External Integrations
+
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| **Browser Automation** | Playwright 1.42 | Web scraping via MCP server |
+| **Email Access** | EmailCompanion MCP | Microsoft Graph API for Outlook |
+
+### Agentic Architecture
+
+The agent uses a **tool-calling loop pattern** with the OpenAI SDK:
+
+```mermaid
+graph LR
+    subgraph "OpenAI SDK Integration"
+        Client[AzureOpenAI Client]
+        FuncCall[Function Calling API]
+        Tools[tools array]
+    end
+    
+    subgraph "Agent Loop"
+        Request[Chat Request]
+        Response[Parse Response]
+        Execute[Execute Tools]
+        Collect[Collect Results]
+    end
+    
+    Client --> FuncCall
+    FuncCall --> Tools
+    Request --> Client
+    Client --> Response
+    Response -->|tool_calls| Execute
+    Execute --> Collect
+    Collect -->|tool results| Request
+```
+
+**Key SDK Usage:**
+- `AzureOpenAI` client from `openai` package connects to Azure endpoints
+- Tools/skills defined as JSON Schema and passed via `tools` parameter
+- `tool_choice: 'auto'` allows model to decide which tools to call
+- Sequential tool execution loop until model returns final response
+- MCP SDK provides stdio transport for Playwright and Email tool servers
+
 ```mermaid
 graph TB
     subgraph "Frontend"
@@ -371,12 +439,14 @@ aviators-code-agent/
 ### Azure OpenAI
 ```javascript
 {
-  endpoint: 'https://la-agentic-customer-advisory-program.cognitiveservices.azure.com/',
-  apiVersion: '2025-04-01-preview',
-  model: 'gpt-5.2',
+  endpoint: process.env.AZURE_OPENAI_ENDPOINT,  // Your Azure OpenAI endpoint
+  apiVersion: '2025-01-01-preview',
+  model: 'gpt-5-2',  // Or your deployed model name
   max_completion_tokens: 8192
 }
 ```
+
+See `.env.example` for required environment variables.
 
 ### MCP Servers
 - **Playwright MCP**: Browser automation for web scraping
