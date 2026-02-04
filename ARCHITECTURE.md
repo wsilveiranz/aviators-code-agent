@@ -32,7 +32,7 @@ graph TB
     
     subgraph "External Services"
         AzureOpenAI[Azure OpenAI<br/>GPT-5.2]
-        Outlook[Outlook/Graph API]
+        Outlook[LogicApps workflow/Office365 Connector]
         Browser[Headless Browser]
     end
     
