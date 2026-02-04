@@ -26,6 +26,8 @@ npm start
 ```bash
 npm start -- --demo
 ```
+[![Demo Video](https://img.youtube.com/vi/td4nzKNibC4/0.jpg)](https://www.youtube.com/watch?v=td4nzKNibC4)
+
 
 ### Programmatic Usage
 ```javascript
