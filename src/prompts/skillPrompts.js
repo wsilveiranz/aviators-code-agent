@@ -122,28 +122,45 @@ Crawl Tech Community Integration on Azure blog, filter by date window + Logic Ap
 2. **USE getTechCommunityBlogPosts** - This tool does date filtering automatically
 3. **EXCLUDE NEWSLETTERS** - Skip any post with "Aviators Newsletter" in the title
 4. **MUST CALL createProductGroupNews** - After fetching posts, you MUST call this skill to generate HTML
+5. **HANDLE PAGINATION** - Check hasMore flag and fetch additional posts if needed
 
-## Workflow (TWO-PHASE APPROACH)
+## Workflow (THREE-PHASE APPROACH WITH PAGINATION)
 
-### Phase 1: Get the list of blog posts (with automatic date filtering)
+### Phase 1: Get the list of blog posts (with automatic date filtering and pagination)
 1. Call computeDateWindow tool with the month to get startPST and endPST
    - For February 2026: startPST = 2026-01-06, endPST = 2026-02-01
 2. Call getTechCommunityBlogPosts with:
    - month: the newsletter month (e.g., "February 2026")
    - startDate: the startPST date in ISO format (e.g., "2026-01-06")
    - endDate: the endPST date in ISO format (e.g., "2026-02-01")
-3. The tool returns ONLY posts within the date range (already filtered)
-4. If no posts returned, tell user there are no Product Group updates for this period
+   - offset: 0 (for first batch)
+   - limit: optional (default 10, max 20)
+3. The tool returns posts within the date range AND pagination metadata:
+   - \`totalPosts\`: Total matching posts available
+   - \`returnedPosts\`: Number of posts in this batch
+   - \`hasMore\`: Boolean - are there more posts to fetch?
+   - \`batchSize\`: Posts per batch
+   - \`offset\`: Current offset
+4. **CHECK hasMore FLAG**: If \`hasMore: true\`, you SHOULD fetch more posts:
+   - Call appendProductGroupPosts with:
+     - month: same as before
+     - startDate: same as before
+     - endDate: same as before
+     - offset: previous offset + batchSize (e.g., if first call returned 10, use offset=10)
+     - limit: optional (default 10, max 20)
+   - Repeat until hasMore is false OR you have enough posts
+5. Combine ALL posts from all batches before proceeding
+6. If no posts returned, tell user there are no Product Group updates for this period
 
 ### Phase 2: Fetch each post and generate HTML
-5. For EACH post URL returned by getTechCommunityBlogPosts:
+7. For EACH post URL returned by getTechCommunityBlogPosts AND appendProductGroupPosts:
    - Call playwright_navigate with the post URL
    - Extract: title, link, image (og:image if available)
    - Write 80-120 word summary from the ACTUAL content you read
    - If navigation times out for one post, skip it and continue with others
 
 ### Phase 3: Generate Product Group section (REQUIRED)
-6. **IMMEDIATELY AFTER** fetching all posts, you MUST call createProductGroupNews with ALL the posts you gathered:
+8. **IMMEDIATELY AFTER** fetching all posts, you MUST call createProductGroupNews with ALL the posts you gathered:
    \`\`\`
    createProductGroupNews({
      month: "February 2026",
@@ -155,12 +172,12 @@ Crawl Tech Community Integration on Azure blog, filter by date window + Logic Ap
          summary: "Your 80-120 word summary...",
          imageUrl: "https://..." 
        },
-       // ... include ALL posts from Phase 2
+       // ... include ALL posts from Phase 2 (from all batches)
      ]
    })
    \`\`\`
-7. The skill requires the posts array with title, link, publishedAt, and summary for each post
-8. Do NOT start Community News until createProductGroupNews has been called and returned HTML
+9. The skill requires the posts array with title, link, publishedAt, and summary for each post
+10. Do NOT start Community News until createProductGroupNews has been called and returned HTML
 
 ## Summary Rules (80-120 words, STRICT)
 - Summaries MUST be based on actual article content you read

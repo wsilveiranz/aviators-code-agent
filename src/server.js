@@ -336,10 +336,15 @@ function summarizeToolResult(result) {
       matchingPosts: parsed.matchingPosts,
       totalPosts: parsed.totalPosts,
       totalFound: parsed.totalFound,
+      returnedPosts: parsed.returnedPosts,
+      hasMore: parsed.hasMore,
+      batchSize: parsed.batchSize,
+      offset: parsed.offset,
       month: parsed.month,
       dateWindow: parsed.dateWindow,
       html: parsed.html, // Keep HTML for preview
       // Truncate posts array - handle both url and link fields
+      // This is intentional batch control, not data loss
       posts: parsed.posts?.slice(0, 10)?.map(p => ({
         title: p.title,
         url: p.url || p.link,

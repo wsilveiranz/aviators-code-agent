@@ -414,13 +414,15 @@ function filterByDateWindow(posts, startDate, endDate) {
 /**
  * Tool that fetches blog posts and filters by date range
  * This does server-side date filtering so the LLM doesn't have to parse dates
+ * Supports pagination with configurable batch size
  */
 export const techCommunityBlogTool = {
   name: 'getTechCommunityBlogPosts',
   description: `Fetches blog posts from the Tech Community Integration on Azure blog and filters by date range. 
 Returns ONLY posts published within the specified date window.
 Use this instead of playwright_navigate when you need blog posts for a specific newsletter month.
-The tool automatically excludes "Aviators Newsletter" posts and handles date filtering.`,
+The tool automatically excludes "Aviators Newsletter" posts and handles date filtering.
+Supports pagination: use offset and limit to fetch posts in batches. Check 'hasMore' flag to determine if additional posts are available.`,
   parameters: {
     type: 'object',
     properties: {
@@ -435,13 +437,30 @@ The tool automatically excludes "Aviators Newsletter" posts and handles date fil
       endDate: {
         type: 'string',
         description: 'End date of the window in ISO format (e.g., "2026-02-01")'
+      },
+      offset: {
+        type: 'number',
+        description: 'Starting index for pagination (default: 0)'
+      },
+      limit: {
+        type: 'number',
+        description: 'Maximum number of posts to return (default: 10, max: 20)'
       }
     },
     required: ['month', 'startDate', 'endDate']
   },
-  execute: async ({ month, startDate, endDate }) => {
+  execute: async ({ month, startDate, endDate, offset = 0, limit }) => {
     try {
-      console.log(`[TechCommunityBlog] Fetching posts for ${month} (${startDate} to ${endDate})`);
+      // Read configuration from environment
+      const DEFAULT_BATCH_SIZE = parseInt(process.env.PRODUCT_GROUP_BATCH_SIZE || '10', 10);
+      const MAX_BATCH_SIZE = parseInt(process.env.PRODUCT_GROUP_MAX_BATCH_SIZE || '20', 10);
+      
+      // Apply limit with constraints
+      const effectiveLimit = limit 
+        ? Math.min(Math.max(1, limit), MAX_BATCH_SIZE) 
+        : DEFAULT_BATCH_SIZE;
+      
+      console.log(`[TechCommunityBlog] Fetching posts for ${month} (${startDate} to ${endDate}), offset=${offset}, limit=${effectiveLimit}`);
       
       const url = 'https://techcommunity.microsoft.com/category/azure/blog/integrationsonazureblog';
       console.log(`[TechCommunityBlog] Navigating to: ${url}`);
@@ -458,6 +477,13 @@ The tool automatically excludes "Aviators Newsletter" posts and handles date fil
       const filteredPosts = filterByDateWindow(allPosts, startDate, endDate);
       console.log(`[TechCommunityBlog] ${filteredPosts.length} posts within date range`);
       
+      // Apply pagination
+      const totalMatchingPosts = filteredPosts.length;
+      const paginatedPosts = filteredPosts.slice(offset, offset + effectiveLimit);
+      const hasMore = (offset + effectiveLimit) < totalMatchingPosts;
+      
+      console.log(`[TechCommunityBlog] Returning ${paginatedPosts.length} posts (offset=${offset}, limit=${effectiveLimit}, hasMore=${hasMore})`);
+      
       // Log what we found and filtered
       if (allPosts.length > 0) {
         console.log(`[TechCommunityBlog] Posts found:`);
@@ -471,14 +497,19 @@ The tool automatically excludes "Aviators Newsletter" posts and handles date fil
         month,
         dateWindow: { start: startDate, end: endDate },
         totalFound: allPosts.length,
-        matchingPosts: filteredPosts.length,
-        posts: filteredPosts.map(p => ({
+        totalPosts: totalMatchingPosts,
+        matchingPosts: totalMatchingPosts, // For backward compatibility
+        returnedPosts: paginatedPosts.length,
+        hasMore,
+        batchSize: effectiveLimit,
+        offset,
+        posts: paginatedPosts.map(p => ({
           title: p.title,
           url: p.url,
           date: p.dateStr
         })),
-        message: filteredPosts.length > 0 
-          ? `Found ${filteredPosts.length} posts within ${month} date window. Use playwright_navigate to fetch details for each post URL.`
+        message: paginatedPosts.length > 0 
+          ? `Found ${paginatedPosts.length} posts (of ${totalMatchingPosts} total) within ${month} date window. ${hasMore ? `Use offset=${offset + effectiveLimit} to fetch more posts.` : ''} Use playwright_navigate to fetch details for each post URL.`
           : `No posts found within the ${month} date window (${startDate} to ${endDate}). The newsletter may have no Product Group news for this period.`
       };
     } catch (error) {

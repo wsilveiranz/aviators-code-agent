@@ -5,7 +5,7 @@
 
 import { dateWindowSkill } from './skills/dateWindow.js';
 import { aceAviatorSkill } from './skills/aceAviator.js';
-import { productGroupSkill } from './skills/productGroup.js';
+import { productGroupSkill, appendProductGroupPostsSkill } from './skills/productGroup.js';
 import { communityNewsSkill } from './skills/communityNews.js';
 import { 
   scrapeLinkedInTool, 
@@ -52,6 +52,7 @@ export const skills = {
   computeDateWindow: dateWindowSkill,
   createAceAviator: aceAviatorSkill,
   createProductGroupNews: productGroupSkill,
+  appendProductGroupPosts: appendProductGroupPostsSkill,
   createCommunityNews: communityNewsSkill
 };
 

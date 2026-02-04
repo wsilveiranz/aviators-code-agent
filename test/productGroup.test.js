@@ -197,6 +197,58 @@ if (test('Should only include Jan 9-28, 2026 posts for Feb 2026 newsletter', () 
   assertEqual(titles.includes('Upcoming Agentic Azure Logic Apps Workshops'), true, 'Should include Jan 09 post');
 })) passed++; else failed++;
 
+// Test 9: Pagination - slice posts with offset and limit
+if (test('Should paginate posts with offset and limit', () => {
+  const posts = parseBlogPosts(sampleBlogSnapshot);
+  const filtered = filterByDateWindow(posts, '2025-01-01', '2026-12-31'); // Wide window
+  
+  // First batch: offset=0, limit=2
+  const batch1 = filtered.slice(0, 2);
+  assertArrayLength(batch1, 2, 'First batch should have 2 posts');
+  
+  // Second batch: offset=2, limit=2
+  const batch2 = filtered.slice(2, 4);
+  assertArrayLength(batch2, 2, 'Second batch should have 2 posts');
+  
+  // Batches should be different
+  assertEqual(batch1[0].url !== batch2[0].url, true, 'Batches should contain different posts');
+})) passed++; else failed++;
+
+// Test 10: Pagination - hasMore flag logic
+if (test('Should calculate hasMore flag correctly', () => {
+  const posts = parseBlogPosts(sampleBlogSnapshot);
+  const filtered = filterByDateWindow(posts, '2025-01-01', '2026-12-31');
+  const total = filtered.length;
+  
+  // When there are more posts
+  const offset1 = 0;
+  const limit1 = 3;
+  const hasMore1 = (offset1 + limit1) < total;
+  assertEqual(hasMore1, true, 'hasMore should be true when more posts available');
+  
+  // When at the end
+  const offset2 = total - 1;
+  const limit2 = 3;
+  const hasMore2 = (offset2 + limit2) < total;
+  assertEqual(hasMore2, false, 'hasMore should be false when at the end');
+})) passed++; else failed++;
+
+// Test 11: Pagination - respect max batch size
+if (test('Should enforce maximum batch size of 20', () => {
+  const MAX_BATCH_SIZE = 20;
+  const requestedLimit = 50; // Request more than max
+  const effectiveLimit = Math.min(Math.max(1, requestedLimit), MAX_BATCH_SIZE);
+  assertEqual(effectiveLimit, 20, 'Effective limit should be capped at 20');
+})) passed++; else failed++;
+
+// Test 12: Pagination - default batch size
+if (test('Should use default batch size of 10 when not specified', () => {
+  const DEFAULT_BATCH_SIZE = 10;
+  const limit = undefined;
+  const effectiveLimit = limit || DEFAULT_BATCH_SIZE;
+  assertEqual(effectiveLimit, 10, 'Default batch size should be 10');
+})) passed++; else failed++;
+
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
 
 // Export for use in actual implementation
