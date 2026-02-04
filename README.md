@@ -28,6 +28,9 @@ npm start -- --demo
 ```
 [![Demo Video](https://img.youtube.com/vi/td4nzKNibC4/0.jpg)](https://www.youtube.com/watch?v=td4nzKNibC4)
 
+### Architecture
+
+Copilot said: The (architecture document)[`ARCHITECTURE.md`](ARCHITECTURE.md)describes the end-to-end architecture of the Logic Apps Aviators Newsletter Agent, covering the React/Vite UI, Express backend, agent core, skills/tools, and how Azure OpenAI + MCP integrations drive data retrieval and section generation. It also outlines the system’s data flow, SSE streaming updates, prompt-loading design, and key guardrails (sequential processing and anti-fabrication).
 
 ### Programmatic Usage
 ```javascript
