@@ -2,6 +2,7 @@
  * Backend API Server for the Newsletter Agent UI
  */
 
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
@@ -38,14 +39,21 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Azure OpenAI configuration
-const AZURE_ENDPOINT = 'https://la-agentic-customer-advisory-program.cognitiveservices.azure.com/';
-const AZURE_API_KEY = 'REDACTED_KEY';
+// Azure OpenAI configuration (loaded from .env)
+const AZURE_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || 'https://ws-open-ai.cognitiveservices.azure.com/';
+const AZURE_API_KEY = process.env.AZURE_OPENAI_API_KEY;
+const AZURE_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2025-01-01-preview';
+const AZURE_MODEL = process.env.AZURE_OPENAI_MODEL || 'gpt-5-2';
+
+if (!AZURE_API_KEY) {
+  console.error('ERROR: AZURE_OPENAI_API_KEY not set. Create a .env file with your API key.');
+  process.exit(1);
+}
 
 const client = new AzureOpenAI({
   endpoint: AZURE_ENDPOINT,
   apiKey: AZURE_API_KEY,
-  apiVersion: '2025-04-01-preview'
+  apiVersion: AZURE_API_VERSION
 });
 
 // Store conversation history per session
@@ -503,7 +511,7 @@ app.post('/api/chat', async (req, res) => {
     
     // Call Azure OpenAI
     let response = await client.chat.completions.create({
-      model: 'gpt-5.2',
+      model: AZURE_MODEL,
       max_completion_tokens: 8192,
       messages: [
         { role: 'system', content: dynamicPrompt },
@@ -551,7 +559,7 @@ app.post('/api/chat', async (req, res) => {
       const contextMessages = truncateMessages(session.messages);
       
       response = await client.chat.completions.create({
-        model: 'gpt-5.2',
+        model: AZURE_MODEL,
         max_completion_tokens: 8192,
         messages: [
           { role: 'system', content: dynamicPrompt },
@@ -657,7 +665,7 @@ app.post('/api/chat/stream', async (req, res) => {
     sendEvent('status', { message: 'Processing request...' });
     
     let response = await client.chat.completions.create({
-      model: 'gpt-5.2',
+      model: AZURE_MODEL,
       max_completion_tokens: 8192,
       messages: [
         { role: 'system', content: dynamicPrompt },
@@ -722,7 +730,7 @@ app.post('/api/chat/stream', async (req, res) => {
       const contextMessages = truncateMessages(session.messages);
       
       response = await client.chat.completions.create({
-        model: 'gpt-5.2',
+        model: AZURE_MODEL,
         max_completion_tokens: 8192,
         messages: [
           { role: 'system', content: dynamicPrompt },
