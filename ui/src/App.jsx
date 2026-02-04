@@ -202,7 +202,10 @@ function App() {
   return (
     <div className="app">
       <header className="header">
-        <h1>🚀 Logic Apps Aviators Newsletter Editor</h1>
+        <div className="header-title">
+          <img src="/logic-apps-logo.svg" alt="Logic Apps" className="header-logo" />
+          <h1>Logic Apps Aviators Newsletter Editor</h1>
+        </div>
         <div className="header-actions">
           <button onClick={saveNewsletter} className={`btn btn-primary ${saved ? 'saved' : ''}`}>
             {saved ? '✓ Saved!' : '💾 Save'}
