@@ -329,19 +329,23 @@ function summarizeToolResult(result) {
   }
   
   // Handle skill results (product group, etc)
-  if (parsed && (parsed.posts || parsed.filteredCount !== undefined)) {
+  if (parsed && (parsed.posts || parsed.filteredCount !== undefined || parsed.matchingPosts !== undefined)) {
     const summarized = {
       success: parsed.success,
       filteredCount: parsed.filteredCount,
+      matchingPosts: parsed.matchingPosts,
       totalPosts: parsed.totalPosts,
+      totalFound: parsed.totalFound,
       month: parsed.month,
       dateWindow: parsed.dateWindow,
       html: parsed.html, // Keep HTML for preview
-      // Truncate posts array
-      posts: parsed.posts?.slice(0, 5)?.map(p => ({
+      // Truncate posts array - handle both url and link fields
+      posts: parsed.posts?.slice(0, 10)?.map(p => ({
         title: p.title,
-        link: p.link,
-        publishedAt: p.publishedAt
+        url: p.url || p.link,
+        link: p.link || p.url,
+        date: p.date || p.publishedAt,
+        publishedAt: p.publishedAt || p.date
       })),
       message: parsed.message,
       error: parsed.error

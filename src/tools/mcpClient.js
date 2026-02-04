@@ -334,8 +334,6 @@ export const mcpTypeTool = {
  * Extracts posts with their titles, URLs, and dates
  */
 function parseBlogPosts(content) {
-  const posts = [];
-  
   // Handle Playwright MCP response format
   let textContent = '';
   if (content && content.content && Array.isArray(content.content)) {
@@ -347,54 +345,50 @@ function parseBlogPosts(content) {
   }
   
   const lines = textContent.split('\n');
+  const urlToPosts = new Map();
   
-  let currentPost = null;
+  // Single pass: track current post context and collect data
+  let currentUrl = null;
+  let currentTitle = null;
+  
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     
-    // Look for link patterns in YAML format: - link "Title" [ref=...]:
+    // Look for link title
     const linkMatch = line.match(/link\s+"([^"]+)"\s+\[ref=/);
     if (linkMatch) {
-      // Save previous post if complete
-      if (currentPost && currentPost.url) {
-        posts.push(currentPost);
-      }
-      currentPost = { title: linkMatch[1] };
+      currentTitle = linkMatch[1];
     }
     
-    // Look for URL pattern: - /url: /blog/...
-    if (currentPost && !currentPost.url) {
-      const urlMatch = line.match(/\/url:\s*([^\s]+)/);
-      if (urlMatch) {
-        const path = urlMatch[1];
-        // Only keep blog posts, not navigation links
-        if (path.includes('/blog/integrationsonazureblog/') && path.length > 40) {
-          currentPost.url = path.startsWith('http') ? path : `https://techcommunity.microsoft.com${path}`;
-        } else {
-          currentPost = null; // Not a blog post link
-        }
+    // Look for blog URL
+    const urlMatch = line.match(/\/url:\s*(\/blog\/integrationsonazureblog\/[^\s]+)/);
+    if (urlMatch && urlMatch[1].length >= 40) {
+      const fullUrl = `https://techcommunity.microsoft.com${urlMatch[1]}`;
+      currentUrl = fullUrl;
+      
+      // Create or update post entry
+      if (!urlToPosts.has(fullUrl) && currentTitle) {
+        urlToPosts.set(fullUrl, { 
+          title: currentTitle, 
+          url: fullUrl, 
+          dateStr: null, 
+          date: null 
+        });
       }
     }
     
-    // Look for dates: text: Jan 28, 2026
-    if (currentPost && currentPost.url && !currentPost.date) {
-      const dateMatch = line.match(/(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2}),?\s+(\d{4})/i);
-      if (dateMatch) {
-        currentPost.dateStr = dateMatch[0];
-        currentPost.date = new Date(`${dateMatch[1]} ${dateMatch[2]}, ${dateMatch[3]}`);
-        // Post is complete, save it and reset
-        posts.push(currentPost);
-        currentPost = null;
+    // Look for date - associate with most recent URL
+    const dateMatch = line.match(/(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2}),?\s+(\d{4})/i);
+    if (dateMatch && currentUrl) {
+      const post = urlToPosts.get(currentUrl);
+      if (post && !post.date) {
+        post.dateStr = dateMatch[0];
+        post.date = new Date(`${dateMatch[1]} ${dateMatch[2]}, ${dateMatch[3]}`);
       }
     }
   }
   
-  // Don't forget the last post
-  if (currentPost && currentPost.url) {
-    posts.push(currentPost);
-  }
-  
-  return posts;
+  return Array.from(urlToPosts.values());
 }
 
 /**
