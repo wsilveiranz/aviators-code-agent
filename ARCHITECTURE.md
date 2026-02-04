@@ -125,8 +125,8 @@ Central configuration and registry for skills and tools.
 graph LR
     subgraph "Agent Core"
         Config[agentConfig]
-        SkillRegistry[skills{}]
-        ToolRegistry[tools{}]
+        SkillRegistry["skills map"]
+        ToolRegistry["tools map"]
     end
     
     subgraph "Exports"
