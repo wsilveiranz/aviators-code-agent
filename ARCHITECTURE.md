@@ -194,7 +194,8 @@ graph TB
 |-------|------|---------|
 | `computeDateWindow` | `dateWindow.js` | Calculate PST newsletter window (first Tuesday → first Sunday) |
 | `createAceAviator` | `aceAviator.js` | Generate Q&A section from email interview |
-| `createProductGroupNews` | `productGroup.js` | Generate table of Tech Community blog posts |
+| `createProductGroupNews` | `productGroup.js` | Generate table of Tech Community blog posts (supports append mode) |
+| `appendProductGroupPosts` | `productGroup.js` | Fetch additional blog posts using pagination |
 | `createCommunityNews` | `communityNews.js` | Generate community contribution summaries |
 
 ### 5. Tools
@@ -332,6 +333,39 @@ Uses Model Context Protocol for:
 ### 5. SSE Streaming
 Real-time updates to UI as sections complete, providing immediate feedback.
 
+### 6. Product Group Post Pagination
+Handles months with more than 10 blog posts using progressive loading:
+
+```mermaid
+sequenceDiagram
+    participant LLM
+    participant Tool as getTechCommunityBlogPosts
+    participant Skill as appendProductGroupPosts
+    participant Server
+    
+    LLM->>Tool: Request posts (offset=0, limit=10)
+    Tool-->>LLM: { posts: [10], hasMore: true, totalPosts: 15 }
+    LLM->>LLM: Check hasMore flag
+    LLM->>Skill: Fetch more (offset=10, limit=10)
+    Skill->>Tool: Request posts (offset=10, limit=10)
+    Tool-->>Skill: { posts: [5], hasMore: false }
+    Skill-->>LLM: Additional 5 posts
+    LLM->>LLM: Combine all 15 posts
+    LLM->>Server: createProductGroupNews with all posts
+```
+
+**Configuration:**
+- Default batch size: 10 posts (configurable via `PRODUCT_GROUP_BATCH_SIZE`)
+- Maximum batch size: 20 posts (configurable via `PRODUCT_GROUP_MAX_BATCH_SIZE`)
+- Server truncation: First 10 posts sent to LLM (intentional batch control)
+- LLM automatically fetches remaining posts when `hasMore: true`
+
+**Benefits:**
+- Prevents token overflow for busy months
+- Transparent pagination with `hasMore` flag
+- Configurable batch sizes for different deployment scenarios
+- Backward compatible with existing workflows
+
 ## File Structure
 
 ```
@@ -388,3 +422,7 @@ aviators-code-agent/
 2. **Rate Limiting**: Delays between LinkedIn requests (4000ms)
 3. **Session Timeout**: In-memory sessions persist until server restart
 4. **Content Validation**: Skills reject fabricated content (fake names)
+
+## Known Limitations
+
+1. **Tech Community Blog Pagination**: The `getTechCommunityBlogPosts` tool only scrapes the first page of the blog listing (typically ~10-15 posts). If the date window spans posts across multiple pages on the Tech Community blog itself, only posts from the first page will be retrieved. This is separate from the server-side pagination feature which handles the 10-item batch limit. Future enhancement could implement multi-page blog scraping.

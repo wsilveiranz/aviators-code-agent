@@ -42,6 +42,25 @@ const aceSection = await executeSkill('createAceAviator', {
   linkedin: 'https://linkedin.com/in/johndoe'
 });
 
+// Fetch Product Group posts with pagination
+const blogPosts = await executeTool('getTechCommunityBlogPosts', {
+  month: 'February 2026',
+  startDate: '2026-01-06',
+  endDate: '2026-02-01',
+  offset: 0,
+  limit: 10
+});
+
+// Check if more posts available
+if (blogPosts.hasMore) {
+  const morePosts = await executeSkill('appendProductGroupPosts', {
+    month: 'February 2026',
+    startDate: '2026-01-06',
+    endDate: '2026-02-01',
+    offset: blogPosts.offset + blogPosts.batchSize
+  });
+}
+
 // Create Community News section
 const communitySection = await executeSkill('createCommunityNews', {
   items: [
@@ -62,7 +81,8 @@ const communitySection = await executeSkill('createCommunityNews', {
 |-------|-------------|
 | `computeDateWindow` | Compute PST newsletter window for a given month |
 | `createAceAviator` | Extract Q&A from email, generate HTML section |
-| `createProductGroupNews` | Filter and format Product Group posts |
+| `createProductGroupNews` | Filter and format Product Group posts (supports append mode) |
+| `appendProductGroupPosts` | Fetch additional Product Group posts using pagination |
 | `createCommunityNews` | Build Community section from scraped LinkedIn data |
 
 ## Tools
@@ -70,6 +90,7 @@ const communitySection = await executeSkill('createCommunityNews', {
 | Tool | Description |
 |------|-------------|
 | `getEmail` | Retrieve email by subject (requires MCP integration) |
+| `getTechCommunityBlogPosts` | Fetch blog posts with date filtering and pagination (configurable batch size) |
 | `scrapeLinkedIn` | Scrape LinkedIn activity URLs using Playwright |
 | `resolveRedirects` | Post-process URLs to resolve redirects |
 
@@ -77,11 +98,40 @@ const communitySection = await executeSkill('createCommunityNews', {
 
 1. **Table of Contents** - Links to all sections
 2. **Ace Aviator of the Month** - Q&A interview with featured community member
-3. **News from Product Group** - Tech Community blog posts about Logic Apps
+3. **News from Product Group** - Tech Community blog posts about Logic Apps (supports pagination for >10 posts)
 4. **News from Community** - Community-contributed articles and videos
 
 ## Configuration
 
+The agent uses environment variables for configuration. Copy `.env.example` to `.env` and configure:
+
+### Azure OpenAI
+```bash
+AZURE_OPENAI_ENDPOINT=https://your-endpoint.cognitiveservices.azure.com/
+AZURE_OPENAI_API_KEY=your-api-key
+AZURE_OPENAI_API_VERSION=2025-01-01-preview
+AZURE_OPENAI_MODEL=gpt-5-2
+```
+
+### Product Group Post Pagination
+```bash
+# Default number of posts per batch (default: 10)
+PRODUCT_GROUP_BATCH_SIZE=10
+
+# Maximum number of posts per batch (default: 20)
+PRODUCT_GROUP_MAX_BATCH_SIZE=20
+```
+
+When fetching Product Group posts, the tool returns posts in batches with pagination metadata:
+- `hasMore`: Boolean indicating more posts available
+- `totalPosts`: Total matching posts count
+- `returnedPosts`: Posts in current batch
+- `batchSize`: Posts per batch
+- `offset`: Current offset for pagination
+
+The LLM automatically handles pagination by calling `appendProductGroupPosts` when `hasMore: true`.
+
+### Playwright Integration
 The agent uses these paths for Playwright tools:
 - Storage: `.github/tools/playwright-login/storage.json`
 - Scraper: `.github/tools/playwright-scrape/run-sequential.js`
