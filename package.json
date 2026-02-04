@@ -1,0 +1,30 @@
+{
+  "name": "aviators-code-agent",
+  "version": "1.0.0",
+  "description": "Logic Apps Aviators Newsletter Editor Agent using Copilot SDK",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/chat.js",
+    "server": "node src/server.js",
+    "ui": "cd ui && npm run dev",
+    "dev": "node --watch src/chat.js",
+    "info": "node src/index.js",
+    "demo": "node src/index.js --demo",
+    "test": "node test/run.js",
+    "test:skills": "node src/test-productGroup.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.50.0",
+    "@azure-rest/ai-inference": "^1.0.0-beta.6",
+    "@azure/core-auth": "^1.10.1",
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "openai": "^6.17.0",
+    "playwright": "^1.42.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
