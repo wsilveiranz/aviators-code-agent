@@ -1,0 +1,347 @@
+# Tech Spec: Deploy Newsletter Agent to Azure AI Foundry
+
+## Summary
+
+Deploy the Logic Apps Aviators Newsletter Agent to Azure using a two-component architecture:
+
+1. **Agent + API** — The Express server (agent orchestration loop, skills, tools, SSE streaming) deploys to **Azure Container Apps** with Managed Identity, registered as a Hosted Agent in Foundry for catalog visibility and governance.
+2. **UI** — The React frontend deploys to **Azure Static Web Apps**, connecting to the Express backend via its Container Apps URL. SSE streaming is fully preserved.
+
+This approach keeps the existing real-time UX (section-by-section SSE streaming) that would be lost if the agent were deployed purely as a Foundry Responses API container.
+
+## Background
+
+The application currently runs as a local Express server (`src/server.js`) with a React frontend (`ui/`). It uses the OpenAI SDK with API key authentication to drive an Azure OpenAI function-calling loop that orchestrates skills (section generators) and tools (data fetchers) to produce newsletter HTML.
+
+A full newsletter generation involves dozens of tool calls over several minutes (email retrieval, blog crawling, LinkedIn scraping with rate-limiting delays). The UI relies on SSE events (`tool_start`, `tool_end`, `section_complete`) to show progress in real time. Foundry's Responses API protocol does not natively support this streaming model, so deploying the Express server directly to Container Apps — while registering it in Foundry's agent catalog — preserves the full UX.
+
+## Requirements
+
+### Must Have
+- Express server (agent + API) deploys to Azure Container Apps
+- Authentication switches from API key to Managed Identity (`@azure/identity`)
+- React UI deploys to Azure Static Web Apps
+- SSE streaming from Express to UI is preserved
+- Existing skills, tools, and prompt system remain unchanged
+- Agent is registered in Foundry's catalog for discoverability/governance
+- Local development mode preserved (API key auth for local, MI for deployed)
+- GitHub Actions CI/CD pipeline for automated builds, tests, and deployments
+
+### Nice to Have
+- Custom domain for both Container Apps and Static Web Apps
+
+### Out of Scope
+- Rewriting the agent in Python
+- Implementing the Foundry Responses API protocol
+- Changes to skill/tool business logic
+- Changes to the prompt system
+
+## Architecture
+
+### Current
+
+```
+[React UI (localhost:5173)] → [Express Server (localhost:3000)] → [Azure OpenAI (API key)]
+                                        ↕
+                                [Skills / Tools / MCP]
+```
+
+### Target
+
+```
+[Azure Static Web Apps]  →  [Azure Container Apps (Express)]  →  [Azure OpenAI (Managed Identity)]
+     (React UI)                  (Agent + API + SSE)                   (Foundry endpoint)
+                                        ↕
+                                [Skills / Tools / MCP]
+                                        │
+                            [Registered in Foundry Catalog]
+```
+
+### Component Responsibilities
+
+| Component | Hosting | Purpose |
+|-----------|---------|---------|
+| Express server (`src/server.js`) | Azure Container Apps | Agent orchestration loop, skill/tool execution, SSE streaming, session management |
+| React UI (`ui/`) | Azure Static Web Apps | Chat interface, HTML preview pane, SSE event consumption |
+| Azure OpenAI | Foundry model endpoint | LLM reasoning (function calling) |
+| MCP servers | Sidecar containers or external | Playwright browser automation, EmailCompanion email retrieval |
+
+## Implementation Plan
+
+### 1. Switch Authentication to Managed Identity
+
+**Files:** `src/server.js`, `package.json`
+
+Add `@azure/identity` dependency. Create a dual-mode auth setup that uses API key for local dev and Managed Identity when deployed:
+
+```javascript
+import { DefaultAzureCredential } from '@azure/identity';
+
+const AZURE_API_KEY = process.env.AZURE_OPENAI_API_KEY;
+
+let client;
+if (AZURE_API_KEY) {
+  // Local development — use API key
+  client = new AzureOpenAI({
+    endpoint: AZURE_ENDPOINT,
+    apiKey: AZURE_API_KEY,
+    apiVersion: AZURE_API_VERSION
+  });
+} else {
+  // Deployed — use Managed Identity
+  const credential = new DefaultAzureCredential();
+  client = new AzureOpenAI({
+    endpoint: AZURE_ENDPOINT,
+    azureADTokenProvider: (scope) => credential.getToken(scope).then(t => t.token),
+    apiVersion: AZURE_API_VERSION
+  });
+}
+```
+
+Remove the hard exit when `AZURE_OPENAI_API_KEY` is not set — MI mode doesn't need it.
+
+### 2. Containerize the Express Server
+
+**File:** new `Dockerfile` (project root)
+
+```dockerfile
+FROM node:18-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --production
+COPY src/ src/
+EXPOSE 3000
+ENV PORT=3000
+CMD ["node", "src/server.js"]
+```
+
+Note: port 3000 (the existing Express port), not 8088 — this is a Container Apps deployment, not a Foundry Responses API container.
+
+### 3. Deploy Express Server to Azure Container Apps
+
+**Prerequisites:**
+- Azure Container Registry (ACR) in the same resource group
+- Azure Container Apps Environment provisioned
+
+**Deployment steps:**
+
+```powershell
+# Build and push to ACR
+az acr build --registry <ACR_NAME> --image aviators-agent:latest .
+
+# Create Container App with Managed Identity
+az containerapp create \
+  --name aviators-newsletter-agent \
+  --resource-group <RG> \
+  --environment <CA_ENV> \
+  --image <ACR_NAME>.azurecr.io/aviators-agent:latest \
+  --target-port 3000 \
+  --ingress external \
+  --min-replicas 1 \
+  --max-replicas 3 \
+  --cpu 1 --memory 2Gi \
+  --system-assigned \
+  --env-vars \
+    AZURE_OPENAI_ENDPOINT=<ENDPOINT> \
+    AZURE_OPENAI_API_VERSION=2025-01-01-preview \
+    AZURE_OPENAI_MODEL=gpt-5-2
+```
+
+After creation, grant the Container App's system-assigned Managed Identity the **Cognitive Services OpenAI User** role on the Azure OpenAI resource:
+
+```powershell
+az role assignment create \
+  --assignee <CA_MANAGED_IDENTITY_PRINCIPAL_ID> \
+  --role "Cognitive Services OpenAI User" \
+  --scope <AZURE_OPENAI_RESOURCE_ID>
+```
+
+Allow ~5 minutes for RBAC propagation.
+
+### 4. Deploy React UI to Azure Static Web Apps
+
+**File:** update `ui/src/App.jsx` (or equivalent) to use a configurable API base URL:
+
+```javascript
+const API_BASE = import.meta.env.VITE_API_BASE || '';
+// Use: `${API_BASE}/api/chat/stream` instead of `/api/chat/stream`
+```
+
+**Build and deploy:**
+
+```powershell
+cd ui && npm run build
+az staticwebapp create \
+  --name aviators-newsletter-ui \
+  --resource-group <RG> \
+  --source ui/dist \
+  --location eastus2
+
+# Set environment variable pointing to Container Apps URL
+az staticwebapp appsettings set \
+  --name aviators-newsletter-ui \
+  --setting-names VITE_API_BASE=https://aviators-newsletter-agent.<CA_ENV_DOMAIN>
+```
+
+### 5. Configure CORS on Container Apps
+
+Update `src/server.js` CORS configuration to allow the Static Web App origin:
+
+```javascript
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*'
+}));
+```
+
+Set `ALLOWED_ORIGINS` env var on the Container App to the Static Web App URL.
+
+### 6. Configure MCP Servers
+
+Two options for MCP connectivity from Container Apps:
+
+**Option A: Sidecar containers** — Run Playwright MCP as a sidecar container in the same Container App. This preserves the current stdio transport.
+
+**Option B: External MCP endpoints** — If the MCP servers support HTTP/SSE transport, deploy them as separate Container Apps and connect via URL.
+
+For EmailCompanion MCP, the container needs access to Microsoft Graph — configure via Managed Identity or app registration credentials stored in Azure Key Vault.
+
+### 7. Register Agent in Foundry Catalog
+
+Register the Container Apps-hosted agent in the Foundry project catalog for discoverability and governance. This makes the agent visible in the Foundry portal without requiring it to implement the Responses API protocol.
+
+### 8. GitHub Actions CI/CD Pipeline
+
+**File:** new `.github/workflows/deploy.yml`
+
+Automated deployment triggered on push to `main`. Uses [Azure federated credentials (OIDC)](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect) — no secrets stored in the repo beyond the federated identity config.
+
+#### Prerequisites (one-time setup)
+
+1. **Configure OIDC federation** between GitHub and Azure — create a federated credential on the Container App's system-assigned Managed Identity (or a user-assigned MI) that trusts the GitHub Actions token issuer for this repo. This eliminates the need for client secrets or app registrations.
+2. **Store these as GitHub Actions variables/secrets:**
+
+   | Secret/Variable | Value |
+   |-----------------|-------|
+   | `AZURE_CLIENT_ID` | Managed Identity client ID (federated credential subject) |
+   | `AZURE_TENANT_ID` | Entra ID tenant ID |
+   | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+   | `ACR_NAME` | Azure Container Registry name |
+   | `CONTAINER_APP_NAME` | Container App name |
+   | `RESOURCE_GROUP` | Resource group name |
+   | `STATIC_WEB_APP_TOKEN` | Deployment token for Static Web App (from portal) |
+
+#### Workflow Design
+
+```yaml
+name: Deploy Newsletter Agent
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # Allow manual triggers
+
+permissions:
+  id-token: write           # Required for OIDC federated credential
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+      - run: npm ci
+      - run: npm test
+
+  deploy-agent:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push to ACR
+        run: |
+          az acr build \
+            --registry ${{ vars.ACR_NAME }} \
+            --image aviators-agent:${{ github.sha }} \
+            --image aviators-agent:latest \
+            .
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ vars.CONTAINER_APP_NAME }} \
+            --resource-group ${{ vars.RESOURCE_GROUP }} \
+            --image ${{ vars.ACR_NAME }}.azurecr.io/aviators-agent:${{ github.sha }}
+
+  deploy-ui:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Build UI
+        run: |
+          cd ui
+          npm ci
+          npm run build
+
+      - name: Deploy to Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.STATIC_WEB_APP_TOKEN }}
+          action: upload
+          app_location: ui/dist
+          skip_app_build: true
+```
+
+#### Key design decisions
+
+- **Test gate** — both deploy jobs depend on `test` passing. No deployment if tests fail.
+- **Parallel deploys** — `deploy-agent` and `deploy-ui` run in parallel after tests pass (they're independent).
+- **OIDC auth** — uses federated credentials, no client secrets to rotate. The GitHub Actions runner gets a short-lived token from Entra ID.
+- **Image tagging** — each build is tagged with the commit SHA for traceability, plus `latest` for convenience.
+- **Manual trigger** — `workflow_dispatch` allows re-deploying without a code change.
+
+## Risks and Open Questions
+
+| Item | Detail |
+|------|--------|
+| **MCP sidecar support** | Container Apps supports sidecar containers, but need to verify Playwright MCP Docker image works as a sidecar with stdio transport. |
+| **Cold start** | Container Apps with `minReplicas: 1` avoids cold starts but incurs always-on cost. With `minReplicas: 0`, first request may be slow. |
+| **SSE through ingress** | Verify Azure Container Apps external ingress doesn't buffer/timeout SSE connections (newsletter generation can take several minutes). |
+| **MCP credentials** | EmailCompanion MCP requires Microsoft Graph access — need to determine if Managed Identity or app registration is appropriate. |
+| **Foundry catalog registration** | Verify the process for registering an externally-hosted agent in Foundry's catalog (vs. a natively hosted container). |
+
+## Testing
+
+- Deploy to Container Apps and verify agent responds via the Container Apps URL
+- Verify SSE streaming works end-to-end (Static Web App → Container App → SSE events)
+- Verify Managed Identity auth works for Azure OpenAI calls
+- Verify MCP tool connections work (email retrieval, browser automation)
+- Verify CORS allows Static Web App to connect to Container App
+- Verify local dev mode still works with API key fallback
+- Run existing test suite (`npm test`) to confirm no skill/tool regressions
+- Test container logs via `az containerapp logs show`
+
+## References
+
+- [Azure Container Apps overview](https://learn.microsoft.com/en-us/azure/container-apps/overview)
+- [Azure Static Web Apps overview](https://learn.microsoft.com/en-us/azure/static-web-apps/overview)
+- [Managed Identity for Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/managed-identity)
+- [Foundry Hosted Agent Concepts](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents?view=foundry)
+- [Foundry RBAC Permissions](https://aka.ms/FoundryPermissions)
+- Internal: [`docs/deploy-hosted-agent-guide.md`](deploy-hosted-agent-guide.md)
+- Internal: [`docs/notes-node-foundry.txt`](notes-node-foundry.txt)
