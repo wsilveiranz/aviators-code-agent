@@ -1,109 +1,116 @@
 # Logic Apps Aviators Newsletter Agent
 
-A Node.js-based code agent using Copilot SDK patterns for creating the Logic Apps Aviators Newsletter.
+An AI-powered agent that automates creation of the Logic Apps Aviators Newsletter. It uses Azure OpenAI with function calling to orchestrate data gathering from email, Tech Community blogs, and LinkedIn — then generates formatted HTML sections ready for publishing.
 
-## Overview
+[![Demo Video](https://img.youtube.com/vi/td4nzKNibC4/0.jpg)](https://www.youtube.com/watch?v=td4nzKNibC4)
 
-This agent automates the creation of the Logic Apps Aviators Newsletter by:
-1. Extracting Ace Aviator Q&A from email
-2. Gathering Product Group news from Tech Community
-3. Processing Community links from LinkedIn activities
+## Prerequisites
 
-## Installation
+- [Node.js](https://nodejs.org/) 18+
+- [Docker](https://www.docker.com/) (for the Playwright MCP server)
+- An Azure OpenAI deployment with API access
 
-```bash
-npm install
-```
+## Getting Started
+
+1. **Clone and install dependencies:**
+
+   ```bash
+   git clone <repo-url>
+   cd aviators-code-agent
+   npm install
+   cd ui && npm install && cd ..
+   ```
+
+2. **Configure environment variables:**
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Edit `.env` and fill in your Azure OpenAI credentials:
+
+   | Variable | Description |
+   |----------|-------------|
+   | `AZURE_OPENAI_ENDPOINT` | Your Azure OpenAI endpoint URL |
+   | `AZURE_OPENAI_API_KEY` | Your API key |
+   | `AZURE_OPENAI_API_VERSION` | API version (default: `2025-01-01-preview`) |
+   | `AZURE_OPENAI_MODEL` | Deployed model name (default: `gpt-5-2`) |
+
+3. **Start the application:**
+
+   ```bash
+   npm start
+   ```
+
+   This launches the Express API server and the React UI together. Open the URL shown by Vite (typically `http://localhost:5173`).
 
 ## Usage
 
-### Show Agent Info
-```bash
-npm start
-```
+| Command | Description |
+|---------|-------------|
+| `npm start` | Start Express server + Vite UI together |
+| `npm run server` | Express API server only |
+| `npm run ui` | Vite dev server only |
+| `npm run chat` | CLI chat mode |
+| `npm run demo` | Run demo |
+| `npm test` | Run all tests |
 
-### Run Demo
-```bash
-npm start -- --demo
-```
-[![Demo Video](https://img.youtube.com/vi/td4nzKNibC4/0.jpg)](https://www.youtube.com/watch?v=td4nzKNibC4)
+### Creating a Newsletter
 
-### Architecture
+In the UI chat, ask the agent to create a newsletter for a given month:
 
-Copilot said: The (architecture document)[`ARCHITECTURE.md`](ARCHITECTURE.md)describes the end-to-end architecture of the Logic Apps Aviators Newsletter Agent, covering the React/Vite UI, Express backend, agent core, skills/tools, and how Azure OpenAI + MCP integrations drive data retrieval and section generation. It also outlines the system’s data flow, SSE streaming updates, prompt-loading design, and key guardrails (sequential processing and anti-fabrication).
+> Create the newsletter for February 2026
+
+The agent processes sections sequentially:
+
+1. **Ace Aviator of the Month** — retrieves a Q&A interview from email via MCP, generates an HTML section
+2. **News from Product Group** — crawls Tech Community blog posts, filters by date window, summarizes each post
+3. **News from Community** — scrapes LinkedIn activity URLs, fetches linked articles, generates summaries
+
+Each section streams to the UI preview in real time via SSE.
 
 ### Programmatic Usage
-```javascript
-import { executeSkill, executeTool } from './src/index.js';
 
-// Compute date window
+```javascript
+import { executeSkill } from './src/index.js';
+
 const dateWindow = await executeSkill('computeDateWindow', { month: 'February 2026' });
 
-// Create Ace Aviator section
 const aceSection = await executeSkill('createAceAviator', {
   month: 'February 2026',
-  emailBody: '...',
   name: 'John Doe',
-  linkedin: 'https://linkedin.com/in/johndoe'
-});
-
-// Create Community News section
-const communitySection = await executeSkill('createCommunityNews', {
-  items: [
-    {
-      externalLink: 'https://example.com/article',
-      title: 'Article Title',
-      authorName: 'Author Name',
-      authorProfile: 'https://linkedin.com/in/author',
-      summary: '80-100 word summary...'
-    }
+  linkedin: 'https://linkedin.com/in/johndoe',
+  qaPairs: [
+    { question: "What's your role and title?", answer: "I'm a developer..." }
   ]
 });
 ```
 
-## Skills
+## Architecture
 
-| Skill | Description |
-|-------|-------------|
-| `computeDateWindow` | Compute PST newsletter window for a given month |
-| `createAceAviator` | Extract Q&A from email, generate HTML section |
-| `createProductGroupNews` | Filter and format Product Group posts |
-| `createCommunityNews` | Build Community section from scraped LinkedIn data |
+The Express backend (`src/server.js`) runs an OpenAI function-calling loop, invoking **skills** (section generators) and **tools** (data fetchers) until the LLM produces the final newsletter HTML.
 
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `getEmail` | Retrieve email by subject (requires MCP integration) |
-| `scrapeLinkedIn` | Scrape LinkedIn activity URLs using Playwright |
-| `resolveRedirects` | Post-process URLs to resolve redirects |
-
-## Newsletter Structure
-
-1. **Table of Contents** - Links to all sections
-2. **Ace Aviator of the Month** - Q&A interview with featured community member
-3. **News from Product Group** - Tech Community blog posts about Logic Apps
-4. **News from Community** - Community-contributed articles and videos
-
-## Configuration
-
-The agent uses these paths for Playwright tools:
-- Storage: `.github/tools/playwright-login/storage.json`
-- Scraper: `.github/tools/playwright-scrape/run-sequential.js`
-- Post-processor: `.github/tools/playwright-scrape/post-process-playwright.js`
-
-## Integration with Copilot
-
-This agent exposes skill and tool definitions compatible with LLM function calling:
-
-```javascript
-import { getSkillDefinitions, getToolDefinitions } from './src/index.js';
-
-// Get definitions for function calling
-const skills = getSkillDefinitions();
-const tools = getToolDefinitions();
 ```
+src/
+├── server.js              # Express API with SSE streaming
+├── agent.js               # Skill/tool registry and dispatch
+├── chat.js                # CLI chat interface
+├── prompts/
+│   └── skillPrompts.js    # On-demand prompt loading per skill
+├── skills/                # High-level section generators
+│   ├── dateWindow.js      # PST date range calculation
+│   ├── aceAviator.js      # Ace Aviator Q&A section
+│   ├── productGroup.js    # Product Group news table
+│   └── communityNews.js   # Community news section
+└── tools/                 # Low-level data fetchers (MCP + direct)
+    ├── emailMcpClient.js  # Email via EmailCompanion MCP
+    ├── mcpClient.js       # Playwright MCP + Tech Community blog
+    └── playwrightTool.js  # LinkedIn scraping via Playwright
+ui/                        # React 19 + Vite frontend
+```
+
+For a detailed architecture walkthrough with diagrams, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## License
 
-Private - Logic Apps Aviators Team
+Private — Logic Apps Aviators Team
