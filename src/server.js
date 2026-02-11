@@ -8,6 +8,7 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { AzureOpenAI } from 'openai';
+import { DefaultAzureCredential } from '@azure/identity';
 import { 
   agentConfig, 
   getSkillDefinitions, 
@@ -36,7 +37,9 @@ if (!fs.existsSync(SAVE_DIR)) {
 }
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*'
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // Azure OpenAI configuration (loaded from .env)
@@ -45,16 +48,25 @@ const AZURE_API_KEY = process.env.AZURE_OPENAI_API_KEY;
 const AZURE_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || '2025-01-01-preview';
 const AZURE_MODEL = process.env.AZURE_OPENAI_MODEL || 'gpt-5-2';
 
-if (!AZURE_API_KEY) {
-  console.error('ERROR: AZURE_OPENAI_API_KEY not set. Create a .env file with your API key.');
-  process.exit(1);
+let client;
+if (AZURE_API_KEY) {
+  // Local development — use API key
+  console.log('[Server] Using API key authentication');
+  client = new AzureOpenAI({
+    endpoint: AZURE_ENDPOINT,
+    apiKey: AZURE_API_KEY,
+    apiVersion: AZURE_API_VERSION
+  });
+} else {
+  // Deployed — use Managed Identity
+  console.log('[Server] Using Managed Identity authentication');
+  const credential = new DefaultAzureCredential();
+  client = new AzureOpenAI({
+    endpoint: AZURE_ENDPOINT,
+    azureADTokenProvider: (scope) => credential.getToken(scope).then(t => t.token),
+    apiVersion: AZURE_API_VERSION
+  });
 }
-
-const client = new AzureOpenAI({
-  endpoint: AZURE_ENDPOINT,
-  apiKey: AZURE_API_KEY,
-  apiVersion: AZURE_API_VERSION
-});
 
 // Store conversation history per session
 const sessions = new Map();
