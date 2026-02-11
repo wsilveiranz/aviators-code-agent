@@ -1,0 +1,285 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.40.2.10011",
+      "templateHash": "7068849864275187439"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "australiaeast",
+      "metadata": {
+        "description": "Azure region for all resources"
+      }
+    },
+    "azureOpenAIEndpoint": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure OpenAI endpoint URL"
+      }
+    },
+    "azureOpenAIApiVersion": {
+      "type": "string",
+      "defaultValue": "2025-01-01-preview",
+      "metadata": {
+        "description": "Azure OpenAI API version"
+      }
+    },
+    "azureOpenAIModel": {
+      "type": "string",
+      "defaultValue": "gpt-5-2",
+      "metadata": {
+        "description": "Azure OpenAI model deployment name"
+      }
+    },
+    "azureOpenAIResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure OpenAI resource ID (for role assignment)"
+      }
+    },
+    "emailMcpEndpoint": {
+      "type": "securestring",
+      "metadata": {
+        "description": "EmailCompanion MCP endpoint URL"
+      }
+    },
+    "emailMcpApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "EmailCompanion MCP API key"
+      }
+    },
+    "imageTag": {
+      "type": "string",
+      "defaultValue": "latest",
+      "metadata": {
+        "description": "Container image tag"
+      }
+    },
+    "swaSku": {
+      "type": "string",
+      "defaultValue": "Free",
+      "allowedValues": [
+        "Free",
+        "Standard"
+      ],
+      "metadata": {
+        "description": "Static Web App SKU"
+      }
+    }
+  },
+  "variables": {
+    "cognitiveServicesOpenAIUserRole": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'a97b65f3-24c7-4388-baec-2e87135dc908')]",
+    "acrPullRole": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "acrAviators",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": true
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "law-aviators",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "cae-aviators",
+      "location": "[parameters('location')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', 'law-aviators'), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', 'law-aviators'), '2023-09-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', 'law-aviators')]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "ca-aviators-agents",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', 'cae-aviators')]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 3001,
+            "transport": "http",
+            "corsPolicy": {
+              "allowedOrigins": [
+                "[format('https://{0}', reference(resourceId('Microsoft.Web/staticSites', 'swa-aviators-ui'), '2023-12-01').defaultHostname)]"
+              ],
+              "allowedMethods": [
+                "GET",
+                "POST",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "allowedHeaders": [
+                "*"
+              ]
+            }
+          },
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators'), '2023-07-01').loginServer]",
+              "username": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators'), '2023-07-01').username]",
+              "passwordSecretRef": "acr-password"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "acr-password",
+              "value": "[listCredentials(resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators'), '2023-07-01').passwords[0].value]"
+            },
+            {
+              "name": "email-mcp-endpoint",
+              "value": "[parameters('emailMcpEndpoint')]"
+            },
+            {
+              "name": "email-mcp-api-key",
+              "value": "[parameters('emailMcpApiKey')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "aviators-agent",
+              "image": "[format('{0}/aviators-agent:{1}', reference(resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators'), '2023-07-01').loginServer, parameters('imageTag'))]",
+              "resources": {
+                "cpu": "[json('1')]",
+                "memory": "2Gi"
+              },
+              "env": [
+                {
+                  "name": "AZURE_OPENAI_ENDPOINT",
+                  "value": "[parameters('azureOpenAIEndpoint')]"
+                },
+                {
+                  "name": "AZURE_OPENAI_API_VERSION",
+                  "value": "[parameters('azureOpenAIApiVersion')]"
+                },
+                {
+                  "name": "AZURE_OPENAI_MODEL",
+                  "value": "[parameters('azureOpenAIModel')]"
+                },
+                {
+                  "name": "EMAIL_MCP_ENDPOINT",
+                  "secretRef": "email-mcp-endpoint"
+                },
+                {
+                  "name": "EMAIL_MCP_API_KEY",
+                  "secretRef": "email-mcp-api-key"
+                },
+                {
+                  "name": "ALLOWED_ORIGINS",
+                  "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/staticSites', 'swa-aviators-ui'), '2023-12-01').defaultHostname)]"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 0,
+            "maxReplicas": 3
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators')]",
+        "[resourceId('Microsoft.App/managedEnvironments', 'cae-aviators')]",
+        "[resourceId('Microsoft.Web/staticSites', 'swa-aviators-ui')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/staticSites",
+      "apiVersion": "2023-12-01",
+      "name": "swa-aviators-ui",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('swaSku')]"
+      },
+      "properties": {}
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(resourceId('Microsoft.App/containerApps', 'ca-aviators-agents'), parameters('azureOpenAIResourceId'), variables('cognitiveServicesOpenAIUserRole'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('cognitiveServicesOpenAIUserRole')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', 'ca-aviators-agents'), '2024-03-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/containerApps', 'ca-aviators-agents')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators')]",
+      "name": "[guid(resourceId('Microsoft.App/containerApps', 'ca-aviators-agents'), resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators'), variables('acrPullRole'))]",
+      "properties": {
+        "roleDefinitionId": "[variables('acrPullRole')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', 'ca-aviators-agents'), '2024-03-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators')]",
+        "[resourceId('Microsoft.App/containerApps', 'ca-aviators-agents')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', 'acrAviators'), '2023-07-01').loginServer]"
+    },
+    "containerAppUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', 'ca-aviators-agents'), '2024-03-01').configuration.ingress.fqdn)]"
+    },
+    "staticWebAppUrl": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/staticSites', 'swa-aviators-ui'), '2023-12-01').defaultHostname)]"
+    },
+    "staticWebAppDeploymentToken": {
+      "type": "string",
+      "value": "[listSecrets(resourceId('Microsoft.Web/staticSites', 'swa-aviators-ui'), '2023-12-01').properties.apiKey]"
+    },
+    "containerAppPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', 'ca-aviators-agents'), '2024-03-01', 'full').identity.principalId]"
+    }
+  }
+}
