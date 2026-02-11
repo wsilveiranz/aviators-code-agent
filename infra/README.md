@@ -1,22 +1,8 @@
 # Infrastructure Deployment
 
-## Automated Setup (Recommended)
+## Quick Start
 
-### 1. Bootstrap (one-time)
-
-Run the bootstrap script to create a service principal and set GitHub Actions secrets/variables:
-
-```powershell
-# Prerequisites: az login, gh auth login
-.\infra\bootstrap.ps1
-```
-
-This creates:
-- Service principal `aviators-gh-deploy` with Contributor role on `rg-aviators`
-- GitHub secrets: `AZURE_CREDENTIALS`, `AZURE_SUBSCRIPTION_ID`
-- GitHub variables: `ACR_NAME`, `CONTAINER_APP_NAME`, `RESOURCE_GROUP`, `AZURE_LOCATION`
-
-### 2. Configure Parameters
+### 1. Configure Parameters
 
 Edit `infra/main.bicepparam` with your values:
 
@@ -26,35 +12,47 @@ Edit `infra/main.bicepparam` with your values:
 | `emailMcpEndpoint` | EmailCompanion MCP server URL |
 | `emailMcpApiKey` | EmailCompanion MCP API key |
 
-### 3. Deploy
+### 2. Deploy
 
-Trigger the GitHub Actions workflow — it provisions infra, builds, and deploys automatically:
+Run the deploy script from the project root (requires `az login`):
 
-- **Push to `main`** — triggers automatically
-- **Manual** — Actions tab → Deploy Newsletter Agent → Run workflow → select branch
+```powershell
+.\infra\deploy.ps1                    # Full deploy (infra + agent + UI)
+.\infra\deploy.ps1 -SkipInfra         # Skip Bicep, just rebuild and deploy
+.\infra\deploy.ps1 -InfraOnly         # Provision infra only
+```
 
-The workflow runs: `test → infra (Bicep) → deploy-agent + deploy-ui (parallel)`
+The script:
+1. Provisions infrastructure via Bicep (ACR, Container Apps, Static Web App, RBAC)
+2. Builds and pushes the container image to ACR
+3. Updates the Container App with the new image
+4. Builds the React UI with the Container App URL baked in
+5. Deploys the UI to Static Web Apps
 
-### 4. Register in Foundry (manual portal step)
+### 3. Register in Foundry (manual portal step)
 
 1. Open Azure AI Foundry portal → your project
 2. **Operate → Register agent**
 3. Provide the Container App URL (port 8088)
 4. Set protocol to HTTP
 
+## CI/CD
+
+GitHub Actions runs tests automatically on push to `main` and on PRs (`.github/workflows/test.yml`). Deployment is handled locally via `deploy.ps1`.
+
 ## Manual Deployment
 
-```bash
-# Prerequisites: az login
+```powershell
+# Set subscription
 az account set --subscription "Logic Apps Demo"
 
 # Create resource group
 az group create --name rg-aviators --location australiaeast
 
 # Deploy infrastructure
-az deployment group create \
-  --resource-group rg-aviators \
-  --template-file infra/main.bicep \
+az deployment group create `
+  --resource-group rg-aviators `
+  --template-file infra/main.bicep `
   --parameters infra/main.bicepparam
 
 # Build and push container image
