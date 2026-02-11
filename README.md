@@ -6,7 +6,7 @@ An AI-powered agent that automates creation of the Logic Apps Aviators Newslette
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+
+- [Node.js](https://nodejs.org/) 20+
 - [Docker](https://www.docker.com/) (for the Playwright MCP server)
 - An Azure OpenAI deployment with API access
 
@@ -110,6 +110,33 @@ ui/                        # React 19 + Vite frontend
 ```
 
 For a detailed architecture walkthrough with diagrams, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## Deployment
+
+The agent deploys to Azure using a two-component architecture:
+
+| Component | Hosting | Purpose |
+|-----------|---------|---------|
+| Express server | Azure Container Apps | Agent orchestration, skills/tools, SSE streaming (port 3001), Foundry Responses API (port 8088) |
+| React UI | Azure Static Web Apps | Chat interface, HTML preview pane |
+
+Authentication switches from API key (local dev) to **Managed Identity** when deployed. The Container App's system-assigned MI is granted the Cognitive Services OpenAI User role.
+
+### Quick Deploy
+
+1. **Provision infrastructure** (one-time):
+   ```bash
+   az deployment group create \
+     --resource-group rg-aviators \
+     --template-file infra/main.bicep \
+     --parameters infra/main.bicepparam
+   ```
+
+2. **Build and deploy** — push to `main` to trigger the GitHub Actions workflow, or trigger manually on any branch via `workflow_dispatch`.
+
+3. **Register in Foundry** — in the Azure AI Foundry portal, navigate to **Operate → Register agent** and provide the Container App URL (port 8088).
+
+See [`docs/tech-spec-foundry-deployment.md`](docs/tech-spec-foundry-deployment.md) and [`infra/README.md`](infra/README.md) for full deployment instructions.
 
 ## License
 

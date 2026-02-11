@@ -32,7 +32,6 @@ A full newsletter generation involves dozens of tool calls over several minutes 
 
 ### Out of Scope
 - Rewriting the agent in Python
-- Implementing the Foundry Responses API protocol
 - Changes to skill/tool business logic
 - Changes to the prompt system
 
@@ -50,11 +49,14 @@ A full newsletter generation involves dozens of tool calls over several minutes 
 
 ```
 [Azure Static Web Apps]  →  [Azure Container Apps (Express)]  →  [Azure OpenAI (Managed Identity)]
-     (React UI)                  (Agent + API + SSE)                   (Foundry endpoint)
+     (React UI)                Port 3001: Agent + API + SSE            (Foundry endpoint)
+                               Port 8088: Foundry Responses API
                                         ↕
                                 [Skills / Tools / MCP]
                                         │
                             [Registered in Foundry Catalog]
+                                        │
+                            [Foundry Playground / Clients]
 ```
 
 ### Component Responsibilities
@@ -105,17 +107,16 @@ Remove the hard exit when `AZURE_OPENAI_API_KEY` is not set — MI mode doesn't 
 **File:** new `Dockerfile` (project root)
 
 ```dockerfile
-FROM node:18-slim
+FROM node:20-slim
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --production
 COPY src/ src/
-EXPOSE 3000
-ENV PORT=3000
+EXPOSE 3001 8088
 CMD ["node", "src/server.js"]
 ```
 
-Note: port 3000 (the existing Express port), not 8088 — this is a Container Apps deployment, not a Foundry Responses API container.
+The container exposes two ports: **3001** for the custom REST+SSE API (used by the React UI) and **8088** for the Foundry Responses API (used by Foundry Playground and clients).
 
 ### 3. Deploy Express Server to Azure Container Apps
 
@@ -137,7 +138,7 @@ az containerapp create \
   --resource-group <RG> \
   --environment <CA_ENV> \
   --image <ACR_NAME>.azurecr.io/aviators-agent:latest \
-  --target-port 3000 \
+  --target-port 3001 \
   --ingress external \
   --min-replicas 0 \
   --max-replicas 3 \
@@ -153,7 +154,7 @@ az containerapp ingress update \
   --name aviators-newsletter-agent \
   --resource-group <RG> \
   --transport http \
-  --target-port 3000 \
+  --target-port 3001 \
   --request-timeout 600
 ```
 
@@ -218,11 +219,48 @@ az containerapp update \
 
 **EmailCompanion MCP** — no changes needed. The MCP server runs through Logic Apps, which manages the connection with Outlook. The agent calls it via HTTP using the endpoint URL and API key from environment variables (`EMAIL_MCP_ENDPOINT`, `EMAIL_MCP_API_KEY`).
 
-### 7. Register Agent in Foundry Catalog
+### 7. Foundry Responses API Endpoint
 
-Register the Container Apps-hosted agent in the Foundry project catalog. The agent must be accessible both through the **Foundry Playground** and through the **web UI** (Static Web App). This requires the agent to be visible in the Foundry portal and have a reachable endpoint.
+**File:** `src/server.js`
 
-### 8. GitHub Actions CI/CD Pipeline
+The Express server exposes a second HTTP listener on port **8088** implementing the [Foundry Responses API protocol](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents). This enables Foundry Playground and external clients to interact with the agent.
+
+**Request:** `POST /responses`
+```json
+{
+  "input": {
+    "messages": [{ "role": "user", "content": "Create the newsletter for June 2025" }]
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "id": "resp_...",
+  "object": "response",
+  "output": [{ "type": "message", "role": "assistant", "content": "..." }],
+  "status": "completed"
+}
+```
+
+The Bicep template configures Container Apps with `additionalPortMappings` to expose port 8088 alongside the primary ingress on port 3001.
+
+### 8. Register Agent in Foundry Catalog
+
+Registration is a **manual portal step** (not automatable via Bicep/CLI currently):
+
+1. Open the Azure AI Foundry portal for the project
+2. Navigate to **Operate → Register agent**
+3. Provide the Container App URL pointing to port 8088 (e.g., `https://ca-aviators-agents.<env-domain>:8088`)
+4. Set protocol to **HTTP**, assign project and agent name
+5. Foundry creates an APIM proxy URL that clients and Playground use
+
+**Prerequisites:**
+- AI Gateway (APIM) must be configured in the Foundry project
+- Container App must be running and accessible on port 8088
+
+### 9. GitHub Actions CI/CD Pipeline
 
 **File:** new `.github/workflows/deploy.yml`
 
@@ -249,6 +287,7 @@ Automated deployment triggered on push to `main`. Uses a **service principal wit
    | `ACR_NAME` | Azure Container Registry name |
    | `CONTAINER_APP_NAME` | Container App name |
    | `RESOURCE_GROUP` | Resource group name |
+   | `CONTAINER_APP_URL` | Container App FQDN (e.g., `https://ca-aviators-agents.<env-domain>`) |
 
 #### Workflow Design
 
@@ -258,7 +297,12 @@ name: Deploy Newsletter Agent
 on:
   push:
     branches: [main]
-  workflow_dispatch:        # Allow manual triggers
+  workflow_dispatch:        # Manual trigger on any branch
+    inputs:
+      deploy:
+        description: Deploy after tests pass
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -270,7 +314,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - run: npm ci
       - run: npm test
 
@@ -307,7 +351,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Build UI
         run: |
@@ -330,7 +374,7 @@ jobs:
 - **Parallel deploys** — `deploy-agent` and `deploy-ui` run in parallel after tests pass (they're independent).
 - **Service principal auth** — uses `az ad sp create-for-rbac --sdk-auth` JSON stored as `AZURE_CREDENTIALS` secret. Rotate periodically.
 - **Image tagging** — each build is tagged with the commit SHA for traceability, plus `latest` for convenience.
-- **Manual trigger** — `workflow_dispatch` allows re-deploying without a code change.
+- **Manual trigger** — `workflow_dispatch` allows manually triggering on any branch (e.g., feature branches for testing) or re-deploying without a code change.
 
 ## Resolved Decisions
 
@@ -343,6 +387,7 @@ jobs:
 | **Foundry catalog** | Required — agent must be accessible via Playground and web UI. |
 | **CI/CD auth** | Service principal with client secret (OIDC not available in tenant). |
 | **ACR** | Provision as part of this work. |
+| **Foundry Responses API** | Implemented on port 8088 in the same Express server. Dual-port exposed via Container Apps. |
 
 ## Remaining Risks
 
@@ -350,7 +395,7 @@ jobs:
 |------|--------|
 | **MCP sidecar support** | Need to verify Playwright MCP Docker image works as a Container Apps sidecar with stdio transport. |
 | **SSE through ingress** | 10-minute timeout configured, but need to verify Container Apps doesn't buffer SSE event streams. |
-| **Foundry catalog registration** | Need to determine the exact process for registering an externally-hosted Container Apps agent in the Foundry catalog. |
+| **Foundry catalog registration** | Registration is a manual portal step. Requires AI Gateway (APIM) configured in Foundry project. |
 
 ## Testing
 

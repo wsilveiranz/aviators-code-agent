@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy after tests pass'
+        type: boolean
+        default: true
 
 permissions:
   contents: read

@@ -1,0 +1,2 @@
+s|https://ws-mcp-server-cwc8h2dde3bpa7gx.newzealandnorth-01.azurewebsites.net/api/mcpservers/EmailCompanion/mcp|EMAIL_MCP_ENDPOINT_REDACTED|g
+s|eyJzZSI6IjIwMjYtMDUtMDNUMTk6MjU6MDguODM4WiIsInNpZyI6IjJmeVp3enFLVWp0ME9DQVNXX1djUFpDY2p5VVd2bzhoYTdWTmtaUHBhNnMifQ|EMAIL_MCP_API_KEY_REDACTED|g

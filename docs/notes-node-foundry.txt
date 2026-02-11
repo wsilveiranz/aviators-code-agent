@@ -1,0 +1,34 @@
+# Deploying a Node.js Agent Using the OpenAI SDK as a Hosted Agent in Azure AI Foundry
+
+## Short Answer
+
+**Yes** — you can deploy a **Node.js–based agent** that uses the **OpenAI SDK (OpenAI‑compatible protocol)** as a **Hosted Agent** in **Azure AI Foundry**, **as long as it is containerized and conforms to the Foundry Hosted Agent contract**. [1](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/how-to/deploy-hosted-agent?view=foundry)[2](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents?view=foundry)
+
+This is a **bring‑your‑own‑code** scenario: Foundry hosts your container, not your raw OpenAI SDK script.
+
+---
+
+## Key Distinction: What Is Being Deployed
+
+You are **not** deploying “the OpenAI SDK” itself as a hosted service.
+
+You **are** deploying:
+- A **Node.js agent service**
+- Containerized (Docker)
+- That **internally uses the OpenAI SDK** (or OpenAI‑compatible calls)
+- And **exposes the Foundry Responses API contract**
+
+Foundry then runs this container as a **Hosted Agent**, handling hosting, scaling, identity, and observability. [2](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents?view=foundry)
+
+---
+
+## Supported Model for Node.js Agents
+
+### Runtime Support
+- Hosted Agents run **containerized code**
+- **Node.js is supported** as long as it runs inside a container
+- Foundry does **not** restrict you to Python or C# only; those are just the most common samples [2](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents?view=foundry)
+
+### Agent Implementation Types
+Hosted Agents support:
+- LangGraph agents
