@@ -931,9 +931,143 @@ app.get('/api/newsletter/load', (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────
+// Foundry Responses API (port 8088)
+// Implements the Foundry Hosted Agent contract
+// ──────────────────────────────────────────────
+
+const foundryApp = express();
+foundryApp.use(express.json({ limit: '10mb' }));
+
+foundryApp.post('/responses', async (req, res) => {
+  try {
+    const { input } = req.body;
+    const messages = input?.messages || [];
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
+
+    if (!lastUserMessage) {
+      return res.status(400).json({ error: 'No user message found in input' });
+    }
+
+    const sessionId = `foundry-${Date.now()}`;
+    if (!sessions.has(sessionId)) {
+      sessions.set(sessionId, {
+        messages: [],
+        sections: { ...NEWSLETTER_TEMPLATE },
+        loadedSkills: []
+      });
+    }
+    const session = sessions.get(sessionId);
+
+    // Load conversation history from input
+    for (const msg of messages) {
+      if (msg.role === 'user' || msg.role === 'assistant') {
+        session.messages.push({ role: msg.role, content: msg.content });
+      }
+    }
+
+    // Detect skills and build prompt
+    const requiredSkills = detectRequiredSkills(lastUserMessage.content);
+    const newSkills = requiredSkills.filter(s => !session.loadedSkills.includes(s));
+    if (newSkills.length > 0) {
+      session.loadedSkills = [...session.loadedSkills, ...newSkills];
+    }
+    const dynamicPrompt = buildDynamicPrompt(BASE_SYSTEM_PROMPT, session.loadedSkills);
+
+    // Run the tool-calling loop
+    const contextMessages = truncateMessages(session.messages);
+    let response = await client.chat.completions.create({
+      model: AZURE_MODEL,
+      max_completion_tokens: 8192,
+      messages: [
+        { role: 'system', content: dynamicPrompt },
+        ...contextMessages
+      ],
+      tools: getFunctionDefinitions(),
+      tool_choice: 'auto'
+    });
+
+    let assistantMessage = response.choices[0].message;
+
+    while (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+      session.messages.push(assistantMessage);
+
+      for (const toolCall of assistantMessage.tool_calls) {
+        const args = JSON.parse(toolCall.function.arguments);
+        const result = await executeFunction(toolCall.function.name, args);
+        const summarizedResult = summarizeToolResult(result);
+
+        session.messages.push({
+          role: 'tool',
+          tool_call_id: toolCall.id,
+          content: summarizedResult
+        });
+
+        if (result.html) {
+          const section = detectSection(result.html);
+          if (section) {
+            session.sections[section] = result.html + (section !== 'community' ? '\n<hr>' : '');
+          }
+        }
+      }
+
+      const loopMessages = truncateMessages(session.messages);
+      response = await client.chat.completions.create({
+        model: AZURE_MODEL,
+        max_completion_tokens: 8192,
+        messages: [
+          { role: 'system', content: dynamicPrompt },
+          ...loopMessages
+        ],
+        tools: getFunctionDefinitions(),
+        tool_choice: 'auto'
+      });
+
+      assistantMessage = response.choices[0].message;
+    }
+
+    // Clean up session
+    sessions.delete(sessionId);
+
+    // Return Foundry Responses API format
+    res.json({
+      id: `resp_${Date.now()}`,
+      object: 'response',
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: assistantMessage.content || ''
+        }
+      ],
+      status: 'completed'
+    });
+  } catch (err) {
+    console.error('[Foundry] Responses API error:', err);
+    res.status(500).json({
+      id: `resp_${Date.now()}`,
+      object: 'response',
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: `Error: ${err.message}`
+        }
+      ],
+      status: 'failed'
+    });
+  }
+});
+
 const PORT = process.env.PORT || 3001;
+const FOUNDRY_PORT = process.env.FOUNDRY_PORT || 8088;
 app.listen(PORT, async () => {
   console.log(`Newsletter Agent API running on http://localhost:${PORT}`);
+
+  // Start Foundry Responses API on separate port
+  foundryApp.listen(FOUNDRY_PORT, () => {
+    console.log(`Foundry Responses API running on http://localhost:${FOUNDRY_PORT}`);
+  });
   
   // Auto-connect to EmailCompanion MCP on startup
   try {

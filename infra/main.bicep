@@ -98,6 +98,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: 3001
         transport: 'http'
+        additionalPortMappings: [
+          {
+            external: true
+            targetPort: 8088
+          }
+        ]
         corsPolicy: {
           allowedOrigins: [
             'https://${staticWebApp.properties.defaultHostname}'
