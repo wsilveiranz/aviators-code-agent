@@ -223,7 +223,7 @@ az containerapp update \
 
 **File:** `src/server.js`
 
-The Express server exposes a second HTTP listener on port **8088** implementing the [Foundry Responses API protocol](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents). This enables Foundry Playground and external clients to interact with the agent.
+The Express server exposes POST /responses on the same port as the main API (port **3001**), implementing the [Foundry Responses API protocol](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents). This enables Foundry Playground and external clients to interact with the agent via the Container Apps ingress URL.
 
 **Request:** `POST /responses`
 ```json
@@ -258,7 +258,9 @@ Registration is a **manual portal step** (not automatable via Bicep/CLI currentl
 
 **Prerequisites:**
 - AI Gateway (APIM) must be configured in the Foundry project
-- Container App must be running and accessible on port 8088
+- Container App must be running and accessible via its ingress URL
+
+> **Fallback:** If Foundry requires port 8088 specifically, the deployment will need to be torn down and recreated with a custom VNET on the Container Apps Environment to support dditionalPortMappings with an external second port.
 
 ### 9. GitHub Actions CI/CD Pipeline
 
@@ -387,7 +389,7 @@ jobs:
 | **Foundry catalog** | Required — agent must be accessible via Playground and web UI. |
 | **CI/CD auth** | Service principal with client secret (OIDC not available in tenant). |
 | **ACR** | Provision as part of this work. |
-| **Foundry Responses API** | Implemented on port 8088 in the same Express server. Dual-port exposed via Container Apps. |
+| **Foundry Responses API** | Served on port 3001 (same as main API) via POST /responses. Avoids custom VNET requirement for additional port mappings. Fallback to port 8088 with VNET if Foundry requires it. |
 
 ## Remaining Risks
 

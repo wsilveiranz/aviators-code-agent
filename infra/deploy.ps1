@@ -17,30 +17,61 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+function Assert-AzSuccess($message) {
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error $message
+        exit 1
+    }
+}
+
+# Resolve paths relative to this script's directory
+$InfraDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$BicepFile = Join-Path $InfraDir "main.bicep"
+$ParamFile = Join-Path $InfraDir "main.bicepparam"
+
 # Configuration
 $SubscriptionName  = "Logic Apps Demo"
 $ResourceGroup     = "rg-aviators"
 $Location          = "australiaeast"
-$AcrName           = "acrAviators"
+$AcrName           = "acraviators"
 $ContainerAppName  = "ca-aviators-agents"
 $SwaName           = "swa-aviators-ui"
 
 # Set subscription
-Write-Host "[1/6] Setting subscription '$SubscriptionName'..."
+Write-Host "[1/7] Setting subscription '$SubscriptionName'..."
 az account set --subscription $SubscriptionName
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to set subscription. Run 'az login' first."
-    exit 1
-}
+Assert-AzSuccess "Failed to set subscription. Run 'az login' first."
 
 # Provision infrastructure (Bicep) unless -SkipInfra
 if (-not $SkipInfra) {
-    Write-Host "[2/6] Creating resource group '$ResourceGroup'..."
+    Write-Host "[2/7] Creating resource group '$ResourceGroup'..."
     az group create --name $ResourceGroup --location $Location --output none
+    Assert-AzSuccess "Failed to create resource group"
 
-    Write-Host "[2/6] Deploying Bicep template (this may take several minutes)..."
-    $deployJson = az deployment group create --resource-group $ResourceGroup --template-file infra/main.bicep --parameters infra/main.bicepparam --query "properties.outputs" --output json
-    $deployOutput = $deployJson | ConvertFrom-Json
+    # Ensure ACR exists before building image
+    Write-Host "[3/7] Ensuring container registry '$AcrName' exists..."
+    az acr show --name $AcrName --resource-group $ResourceGroup --output none 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        az acr create --name $AcrName --resource-group $ResourceGroup --location $Location --sku Basic --admin-enabled true --output none
+        Assert-AzSuccess "Failed to create container registry"
+        Write-Host "   Container registry created"
+    }
+
+    # Build and push container image BEFORE Bicep
+    Write-Host "[4/7] Building and pushing container image to ACR..."
+    $ImageTag = git rev-parse --short HEAD
+    az acr build --registry $AcrName --image "aviators-agent:$ImageTag" --image "aviators-agent:latest" .
+    Assert-AzSuccess "Container image build failed"
+
+    Write-Host "[5/7] Deploying Bicep template (this may take several minutes)..."
+    $rawOutput = az deployment group create --resource-group $ResourceGroup --template-file $BicepFile --parameters $ParamFile --query "properties.outputs" --output json 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Bicep deployment failed. Check 'az deployment group show -g $ResourceGroup -n main' for details."
+        exit 1
+    }
+    # Filter out non-JSON lines (az CLI may emit info messages)
+    $jsonLines = @($rawOutput) | Where-Object { $_ -match '^\s*[\{\[\"]' -or $_ -match '^\s*\}' -or $_ -match '^\s*\]' -or $_ -match '^\s*"' }
+    $deployOutput = ($jsonLines -join "`n") | ConvertFrom-Json
 
     $ContainerAppUrl = $deployOutput.containerAppUrl.value
     $SwaUrl          = $deployOutput.staticWebAppUrl.value
@@ -58,36 +89,37 @@ if (-not $SkipInfra) {
     }
 }
 
-# If -SkipInfra, fetch existing resource info
+# If -SkipInfra, fetch existing resource info and build image
 if ($SkipInfra) {
-    Write-Host "[2/6] Skipping infra, fetching existing resource info..."
+    Write-Host "[2/7] Skipping infra, fetching existing resource info..."
     $AcrLoginServer = az acr show --name $AcrName --query loginServer -o tsv
+    Assert-AzSuccess "Failed to get ACR info"
     $ContainerAppFqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup --query "properties.configuration.ingress.fqdn" -o tsv
+    Assert-AzSuccess "Failed to get Container App info"
     $ContainerAppUrl = "https://$ContainerAppFqdn"
     $SwaToken = az staticwebapp secrets list --name $SwaName --query "properties.apiKey" -o tsv
+    Assert-AzSuccess "Failed to get SWA token"
+
+    Write-Host "[3/7] Building and pushing container image..."
+    $ImageTag = git rev-parse --short HEAD
+    az acr build --registry $AcrName --image "aviators-agent:$ImageTag" --image "aviators-agent:latest" .
+    Assert-AzSuccess "Container image build failed"
+
+    Write-Host "[4/7] Deploying agent to Container Apps..."
+    az containerapp update --name $ContainerAppName --resource-group $ResourceGroup --image "${AcrLoginServer}/aviators-agent:${ImageTag}"
+    Assert-AzSuccess "Container App update failed"
 }
-
-# Build and push container image
-Write-Host ""
-Write-Host "[3/6] Building and pushing container image..."
-$ImageTag = git rev-parse --short HEAD
-az acr build --registry $AcrName --image "aviators-agent:$ImageTag" --image "aviators-agent:latest" .
-
-# Update Container App
-Write-Host ""
-Write-Host "[4/6] Deploying agent to Container Apps..."
-az containerapp update --name $ContainerAppName --resource-group $ResourceGroup --image "${AcrLoginServer}/aviators-agent:${ImageTag}"
 
 # Build and deploy UI
 Write-Host ""
-Write-Host "[5/6] Building UI..."
+Write-Host "[6/7] Building UI..."
 $env:VITE_API_BASE = $ContainerAppUrl
 Push-Location ui
 npm ci
 npm run build
 Pop-Location
 
-Write-Host "[6/6] Deploying UI to Static Web Apps..."
+Write-Host "[7/7] Deploying UI to Static Web Apps..."
 if (-not (Get-Command swa -ErrorAction SilentlyContinue)) {
     npm install -g @azure/static-web-apps-cli
 }
@@ -97,6 +129,6 @@ swa deploy ui/dist --deployment-token $SwaToken --env production
 Write-Host ""
 Write-Host "Deployment complete!"
 Write-Host "   Agent API:  $ContainerAppUrl"
-Write-Host "   Foundry:    ${ContainerAppUrl}:8088/responses"
+Write-Host "   Foundry:    ${ContainerAppUrl}/responses"
 Write-Host ""
 Write-Host "If this is the first deploy, wait ~5 minutes for RBAC propagation."

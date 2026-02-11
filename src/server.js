@@ -932,14 +932,11 @@ app.get('/api/newsletter/load', (req, res) => {
 });
 
 // ──────────────────────────────────────────────
-// Foundry Responses API (port 8088)
-// Implements the Foundry Hosted Agent contract
+// Foundry Responses API
+// Implements the Foundry Hosted Agent contract on the same Express app
 // ──────────────────────────────────────────────
 
-const foundryApp = express();
-foundryApp.use(express.json({ limit: '10mb' }));
-
-foundryApp.post('/responses', async (req, res) => {
+app.post('/responses', async (req, res) => {
   try {
     const { input } = req.body;
     const messages = input?.messages || [];
@@ -1060,14 +1057,9 @@ foundryApp.post('/responses', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3001;
-const FOUNDRY_PORT = process.env.FOUNDRY_PORT || 8088;
 app.listen(PORT, async () => {
   console.log(`Newsletter Agent API running on http://localhost:${PORT}`);
-
-  // Start Foundry Responses API on separate port
-  foundryApp.listen(FOUNDRY_PORT, () => {
-    console.log(`Foundry Responses API running on http://localhost:${FOUNDRY_PORT}`);
-  });
+  console.log(`Foundry Responses API available at http://localhost:${PORT}/responses`);
   
   // Auto-connect to EmailCompanion MCP on startup
   try {

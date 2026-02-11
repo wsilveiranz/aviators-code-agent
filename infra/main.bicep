@@ -38,7 +38,7 @@ param swaSku string = 'Free'
 // ──────────────────────────────────────────────
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
-  name: 'acrAviators'
+  name: 'acraviators'
   location: location
   sku: {
     name: 'Basic'
@@ -98,12 +98,6 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         external: true
         targetPort: 3001
         transport: 'http'
-        additionalPortMappings: [
-          {
-            external: true
-            targetPort: 8088
-          }
-        ]
         corsPolicy: {
           allowedOrigins: [
             'https://${staticWebApp.properties.defaultHostname}'
@@ -161,13 +155,16 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
+@description('Azure region for Static Web App (limited availability)')
+param swaLocation string = 'eastasia'
+
 // ──────────────────────────────────────────────
 // Static Web App (UI)
 // ──────────────────────────────────────────────
 
 resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
   name: 'swa-aviators-ui'
-  location: location
+  location: swaLocation
   sku: {
     name: swaSku
   }
