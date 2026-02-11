@@ -6,8 +6,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const EMAIL_MCP_ENDPOINT = 'EMAIL_MCP_ENDPOINT_REDACTED';
-const EMAIL_MCP_API_KEY = 'EMAIL_MCP_API_KEY_REDACTED';
+const EMAIL_MCP_ENDPOINT = process.env.EMAIL_MCP_ENDPOINT;
+const EMAIL_MCP_API_KEY = process.env.EMAIL_MCP_API_KEY;
 
 let emailMcpClient = null;
 
