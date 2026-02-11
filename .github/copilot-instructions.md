@@ -59,7 +59,7 @@ React 19 + Vite SPA. Split-pane layout: chat on left, HTML preview on right. Rec
 - **Anti-fabrication guardrail** — the system prompt and skill prompts explicitly prohibit the LLM from inventing content. Skills validate against fabricated data.
 - **Sequential section processing** — the system enforces generating sections one at a time (Ace Aviator → Product Group → Community) to prevent data mixing.
 - **Console logging pattern** — skills/tools use `console.log` with bracketed prefixes like `[AceAviator]`, `[ProductGroup]` for traceability.
-- **Environment config** — `.env` file required for Azure OpenAI credentials. See `.env.example` for the four required variables (`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_VERSION`, `AZURE_OPENAI_MODEL`).
+- **Environment config** — All secrets, API keys, endpoints, and service configuration **must** be stored in the `.env` file and accessed via `process.env`. Never hardcode credentials or sensitive URLs in source files. See `.env.example` for all required variables.
 
 ## MCP Servers
 
