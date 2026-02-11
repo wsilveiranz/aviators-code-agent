@@ -24,8 +24,33 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  deploy-agent:
+  infra:
     needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      container-app-url: ${{ steps.deploy-bicep.outputs.containerAppUrl }}
+      swa-token: ${{ steps.deploy-bicep.outputs.staticWebAppDeploymentToken }}
+      acr-login-server: ${{ steps.deploy-bicep.outputs.acrLoginServer }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Bicep
+        id: deploy-bicep
+        uses: azure/arm-deploy@v2
+        with:
+          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          resourceGroupName: ${{ vars.RESOURCE_GROUP }}
+          template: infra/main.bicep
+          parameters: infra/main.bicepparam
+          failOnStdErr: false
+
+  deploy-agent:
+    needs: [test, infra]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,10 +73,10 @@ jobs:
           az containerapp update \
             --name ${{ vars.CONTAINER_APP_NAME }} \
             --resource-group ${{ vars.RESOURCE_GROUP }} \
-            --image ${{ vars.ACR_NAME }}.azurecr.io/aviators-agent:${{ github.sha }}
+            --image ${{ needs.infra.outputs.acr-login-server }}/aviators-agent:${{ github.sha }}
 
   deploy-ui:
-    needs: test
+    needs: [test, infra]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +86,7 @@ jobs:
 
       - name: Build UI
         env:
-          VITE_API_BASE: ${{ vars.CONTAINER_APP_URL }}
+          VITE_API_BASE: ${{ needs.infra.outputs.container-app-url }}
         run: |
           cd ui
           npm ci
@@ -70,7 +95,7 @@ jobs:
       - name: Deploy to Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
-          azure_static_web_apps_api_token: ${{ secrets.STATIC_WEB_APP_TOKEN }}
+          azure_static_web_apps_api_token: ${{ needs.infra.outputs.swa-token }}
           action: upload
           app_location: ui/dist
           skip_app_build: true
