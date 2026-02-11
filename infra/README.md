@@ -6,10 +6,9 @@
 
 Run the bootstrap script to create a service principal and set GitHub Actions secrets/variables:
 
-```bash
-# Prerequisites: az login, gh auth login, jq
-chmod +x infra/bootstrap.sh
-./infra/bootstrap.sh
+```powershell
+# Prerequisites: az login, gh auth login
+.\infra\bootstrap.ps1
 ```
 
 This creates:
