@@ -48,12 +48,8 @@ if (-not $SkipInfra) {
     az group create --name $ResourceGroup --location $Location --output none
 
     Write-Host "🏗️  Deploying Bicep template..."
-    $deployOutput = az deployment group create `
-        --resource-group $ResourceGroup `
-        --template-file infra/main.bicep `
-        --parameters infra/main.bicepparam `
-        --query "properties.outputs" `
-        --output json | ConvertFrom-Json
+    $deployJson = az deployment group create --resource-group $ResourceGroup --template-file infra/main.bicep --parameters infra/main.bicepparam --query "properties.outputs" --output json
+    $deployOutput = $deployJson | ConvertFrom-Json
 
     $ContainerAppUrl = $deployOutput.containerAppUrl.value
     $SwaUrl          = $deployOutput.staticWebAppUrl.value
@@ -73,9 +69,8 @@ if (-not $SkipInfra) {
     # Fetch existing values
     Write-Host "⏭️  Skipping infra, fetching existing resource info..."
     $AcrLoginServer = az acr show --name $AcrName --query loginServer -o tsv
-    $ContainerAppUrl = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup `
-        --query "properties.configuration.ingress.fqdn" -o tsv
-    $ContainerAppUrl = "https://$ContainerAppUrl"
+    $ContainerAppFqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup --query "properties.configuration.ingress.fqdn" -o tsv
+    $ContainerAppUrl = "https://$ContainerAppFqdn"
     $SwaToken = az staticwebapp secrets list --name "swa-aviators-ui" --query "properties.apiKey" -o tsv
 }
 
@@ -86,10 +81,7 @@ if (-not $SkipInfra) {
 Write-Host ""
 Write-Host "🐳 Building and pushing container image..."
 $ImageTag = git rev-parse --short HEAD
-az acr build --registry $AcrName `
-    --image "aviators-agent:$ImageTag" `
-    --image "aviators-agent:latest" `
-    .
+az acr build --registry $AcrName --image "aviators-agent:$ImageTag" --image "aviators-agent:latest" .
 
 # ──────────────────────────────────────────────
 # Update Container App
@@ -97,10 +89,7 @@ az acr build --registry $AcrName `
 
 Write-Host ""
 Write-Host "🚀 Deploying agent to Container Apps..."
-az containerapp update `
-    --name $ContainerAppName `
-    --resource-group $ResourceGroup `
-    --image "${AcrLoginServer}/aviators-agent:${ImageTag}"
+az containerapp update --name $ContainerAppName --resource-group $ResourceGroup --image "${AcrLoginServer}/aviators-agent:${ImageTag}"
 
 # ──────────────────────────────────────────────
 # Build and deploy UI
