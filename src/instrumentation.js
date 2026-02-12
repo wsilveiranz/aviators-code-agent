@@ -4,7 +4,8 @@
  */
 
 import { useAzureMonitor } from '@azure/monitor-opentelemetry';
-import { Resource } from '@opentelemetry/resources';
+import pkg from '@opentelemetry/resources';
+const { Resource } = pkg;
 
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
 
