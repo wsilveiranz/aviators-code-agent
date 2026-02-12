@@ -107,14 +107,31 @@ export async function connectToPlaywrightMCP(options = {}) {
       console.log(`[MCP] Storage valid with ${storageCheck.cookieCount} LinkedIn cookies`);
     }
 
-    mcpTransport = new SSEClientTransport(new URL(PLAYWRIGHT_MCP_URL));
-    mcpClient = new Client({
-      name: 'aviators-code-agent',
-      version: '1.0.0'
-    });
-    await mcpClient.connect(mcpTransport);
-    console.log('[MCP] Connected to Playwright MCP server (SSE)');
-    return mcpClient;
+    // Retry connection to handle sidecar startup race condition
+    const sseUrl = PLAYWRIGHT_MCP_URL.endsWith('/sse') ? PLAYWRIGHT_MCP_URL : `${PLAYWRIGHT_MCP_URL}/sse`;
+    const maxRetries = 5;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        mcpTransport = new SSEClientTransport(new URL(sseUrl));
+        mcpClient = new Client({
+          name: 'aviators-code-agent',
+          version: '1.0.0'
+        });
+        await mcpClient.connect(mcpTransport);
+        console.log('[MCP] Connected to Playwright MCP server (SSE)');
+        return mcpClient;
+      } catch (err) {
+        mcpClient = null;
+        mcpTransport = null;
+        if (attempt < maxRetries) {
+          const delay = attempt * 2;
+          console.log(`[MCP] Sidecar not ready (attempt ${attempt}/${maxRetries}), retrying in ${delay}s...`);
+          await new Promise(r => setTimeout(r, delay * 1000));
+        } else {
+          throw err;
+        }
+      }
+    }
   }
 
   // Local dev: connect via stdio
