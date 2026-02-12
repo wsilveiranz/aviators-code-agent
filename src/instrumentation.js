@@ -4,15 +4,14 @@
  */
 
 import { useAzureMonitor } from '@azure/monitor-opentelemetry';
-import pkg from '@opentelemetry/resources';
-const { Resource } = pkg;
 
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
 
 if (connectionString) {
+  const { resourceFromAttributes } = await import('@opentelemetry/resources');
   useAzureMonitor({
     azureMonitorExporterOptions: { connectionString },
-    resource: new Resource({
+    resource: resourceFromAttributes({
       'service.name': 'aviators-newsletter-agent',
       'gen_ai.agent.id': 'aviators-newsletter-agent',
     }),
