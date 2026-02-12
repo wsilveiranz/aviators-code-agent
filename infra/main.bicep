@@ -79,6 +79,32 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
 }
 
 // ──────────────────────────────────────────────
+// Storage Account (Azure Files for shared config)
+// ──────────────────────────────────────────────
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: 'staviators'
+  location: location
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+}
+
+resource fileService 'Microsoft.Storage/storageAccounts/fileServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource fileShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2023-05-01' = {
+  parent: fileService
+  name: 'playwright-state'
+  properties: {
+    shareQuota: 1
+  }
+}
+
+// ──────────────────────────────────────────────
 // Container Apps Environment
 // ──────────────────────────────────────────────
 
@@ -92,6 +118,19 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' = {
         customerId: logAnalytics.properties.customerId
         sharedKey: logAnalytics.listKeys().primarySharedKey
       }
+    }
+  }
+}
+
+resource caeStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+  parent: cae
+  name: 'playwright-state'
+  properties: {
+    azureFile: {
+      accountName: storageAccount.name
+      accountKey: storageAccount.listKeys().keys[0].value
+      shareName: fileShare.name
+      accessMode: 'ReadOnly'
     }
   }
 }
@@ -144,6 +183,13 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       ]
     }
     template: {
+      volumes: [
+        {
+          name: 'playwright-state'
+          storageName: caeStorage.name
+          storageType: 'AzureFile'
+        }
+      ]
       containers: [
         {
           name: 'aviators-agent'
@@ -160,7 +206,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'EMAIL_MCP_API_KEY', secretRef: 'email-mcp-api-key' }
             { name: 'ALLOWED_ORIGINS', value: 'https://${staticWebApp.properties.defaultHostname}' }
             { name: 'PLAYWRIGHT_MCP_URL', value: 'http://localhost:8080' }
+            { name: 'PLAYWRIGHT_STORAGE_PATH', value: '/mnt/playwright-state/storage.json' }
             { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
+          ]
+          volumeMounts: [
+            {
+              volumeName: 'playwright-state'
+              mountPath: '/mnt/playwright-state'
+            }
           ]
         }
         {
@@ -172,11 +225,19 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             '--host'
             '0.0.0.0'
             '--headless'
+            '--storage-state'
+            '/mnt/playwright-state/storage.json'
           ]
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
           }
+          volumeMounts: [
+            {
+              volumeName: 'playwright-state'
+              mountPath: '/mnt/playwright-state'
+            }
+          ]
         }
       ]
       scale: {

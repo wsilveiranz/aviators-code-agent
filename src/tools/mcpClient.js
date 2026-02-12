@@ -98,6 +98,15 @@ export async function connectToPlaywrightMCP(options = {}) {
   // When PLAYWRIGHT_MCP_URL is set, connect via SSE (deployed sidecar)
   if (PLAYWRIGHT_MCP_URL) {
     console.log(`[MCP] Connecting to Playwright MCP via SSE at ${PLAYWRIGHT_MCP_URL}...`);
+
+    // In deployed mode, check if storage.json is mounted
+    const storageCheck = isStorageValid(STORAGE_PATH);
+    if (!storageCheck.valid) {
+      console.log(`[MCP] Storage check: ${storageCheck.reason} (LinkedIn scraping may not work)`);
+    } else {
+      console.log(`[MCP] Storage valid with ${storageCheck.cookieCount} LinkedIn cookies`);
+    }
+
     mcpTransport = new SSEClientTransport(new URL(PLAYWRIGHT_MCP_URL));
     mcpClient = new Client({
       name: 'aviators-code-agent',

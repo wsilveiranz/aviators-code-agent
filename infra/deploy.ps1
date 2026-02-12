@@ -9,10 +9,12 @@
 #   .\infra\deploy.ps1                    # Full deploy (infra + agent + UI)
 #   .\infra\deploy.ps1 -SkipInfra         # Skip Bicep, just rebuild and deploy
 #   .\infra\deploy.ps1 -InfraOnly         # Provision infra only
+#   .\infra\deploy.ps1 -UploadStorage C:\path\to\storage.json  # Upload LinkedIn storage file
 
 param(
     [switch]$SkipInfra,
-    [switch]$InfraOnly
+    [switch]$InfraOnly,
+    [string]$UploadStorage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +43,8 @@ $Location          = "australiaeast"
 $AcrName           = "acraviators"
 $ContainerAppName  = "ca-aviators-agents"
 $SwaName           = "swa-aviators-ui"
+$StorageAccountName = "staviators"
+$FileShareName     = "playwright-state"
 
 # Azure OpenAI resource (for RBAC - may be in a different RG/subscription)
 $OpenAIResourceId  = "/subscriptions/80d4fe69-c95b-4dd2-a938-9250f1c8ab03/resourceGroups/WSilveira-Sandbox/providers/Microsoft.CognitiveServices/accounts/ws-open-ai"
@@ -49,6 +53,23 @@ $OpenAIResourceId  = "/subscriptions/80d4fe69-c95b-4dd2-a938-9250f1c8ab03/resour
 Write-Host "[1/8] Setting subscription '$SubscriptionName'..."
 az account set --subscription $SubscriptionName
 Assert-AzSuccess "Failed to set subscription. Run 'az login' first."
+
+# Handle standalone storage upload
+if ($UploadStorage -and $SkipInfra -and -not $InfraOnly) {
+    Write-Host "Uploading storage.json to Azure Files..."
+    if (-not (Test-Path $UploadStorage)) {
+        Write-Error "Storage file not found: $UploadStorage"
+        exit 1
+    }
+    $storageKey = az storage account keys list --account-name $StorageAccountName --resource-group $ResourceGroup --query "[0].value" -o tsv
+    Assert-AzSuccess "Failed to get storage account key"
+    az storage file upload --account-name $StorageAccountName --account-key $storageKey --share-name $FileShareName --source $UploadStorage --path "storage.json" --output none
+    Assert-AzSuccess "Failed to upload storage file"
+    Write-Host "   storage.json uploaded to $FileShareName file share"
+    Write-Host "   Restart the container app to pick up changes:"
+    Write-Host "   az containerapp revision restart -n $ContainerAppName -g $ResourceGroup"
+    exit 0
+}
 
 # Provision infrastructure (Bicep) unless -SkipInfra
 if (-not $SkipInfra) {
@@ -109,6 +130,18 @@ if (-not $SkipInfra) {
         Write-Host "   Wait ~5 minutes for RBAC propagation on first deploy"
     } else {
         Write-Host "   Role assignment already exists"
+    }
+
+    # Upload storage.json to Azure Files if provided
+    if ($UploadStorage) {
+        Write-Host "   Uploading storage.json to Azure Files..."
+        if (Test-Path $UploadStorage) {
+            $storageKey = az storage account keys list --account-name $StorageAccountName --resource-group $ResourceGroup --query "[0].value" -o tsv
+            az storage file upload --account-name $StorageAccountName --account-key $storageKey --share-name $FileShareName --source $UploadStorage --path "storage.json" --output none
+            Write-Host "   storage.json uploaded"
+        } else {
+            Write-Host "   WARNING: Storage file not found: $UploadStorage (skipping)"
+        }
     }
 
     if ($InfraOnly) {
