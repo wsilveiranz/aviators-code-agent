@@ -8,7 +8,7 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import { AzureOpenAI } from 'openai';
-import { DefaultAzureCredential } from '@azure/identity';
+import { DefaultAzureCredential, getBearerTokenProvider } from '@azure/identity';
 import { 
   agentConfig, 
   getSkillDefinitions, 
@@ -61,9 +61,10 @@ if (AZURE_API_KEY) {
   // Deployed — use Managed Identity
   console.log('[Server] Using Managed Identity authentication');
   const credential = new DefaultAzureCredential();
+  const azureADTokenProvider = getBearerTokenProvider(credential, 'https://cognitiveservices.azure.com/.default');
   client = new AzureOpenAI({
     endpoint: AZURE_ENDPOINT,
-    azureADTokenProvider: (scope) => credential.getToken(scope).then(t => t.token),
+    azureADTokenProvider,
     apiVersion: AZURE_API_VERSION
   });
 }

@@ -15,7 +15,8 @@ param azureOpenAIApiVersion string = '2025-01-01-preview'
 @description('Azure OpenAI model deployment name')
 param azureOpenAIModel string = 'gpt-5-2'
 
-@description('Azure OpenAI resource ID (for role assignment)')
+@description('Azure OpenAI resource ID (for future use with scoped role assignment)')
+#disable-next-line no-unused-params
 param azureOpenAIResourceId string
 
 @description('EmailCompanion MCP endpoint URL')
@@ -144,7 +145,23 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'EMAIL_MCP_ENDPOINT', secretRef: 'email-mcp-endpoint' }
             { name: 'EMAIL_MCP_API_KEY', secretRef: 'email-mcp-api-key' }
             { name: 'ALLOWED_ORIGINS', value: 'https://${staticWebApp.properties.defaultHostname}' }
+            { name: 'PLAYWRIGHT_MCP_URL', value: 'http://localhost:8080' }
           ]
+        }
+        {
+          name: 'playwright-mcp'
+          image: 'mcr.microsoft.com/playwright/mcp:latest'
+          args: [
+            '--port'
+            '8080'
+            '--host'
+            '0.0.0.0'
+            '--headless'
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
         }
       ]
       scale: {
@@ -171,25 +188,12 @@ resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
   properties: {}
 }
 
-// ──────────────────────────────────────────────
-// Role Assignment: Container App MI → Azure OpenAI
-// ──────────────────────────────────────────────
+@description('Skip role assignments if they already exist (set to false on first deploy)')
+param createRoleAssignments bool = true
 
-// Cognitive Services OpenAI User role
-var cognitiveServicesOpenAIUserRole = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  'a97b65f3-24c7-4388-baec-2e87135dc908'
-)
-
-resource openAIRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(containerApp.id, azureOpenAIResourceId, cognitiveServicesOpenAIUserRole)
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: cognitiveServicesOpenAIUserRole
-    principalId: containerApp.identity.principalId
-    principalType: 'ServicePrincipal'
-  }
-}
+// ──────────────────────────────────────────────
+// Role Assignment: Container App MI → ACR Pull
+// ──────────────────────────────────────────────
 
 // ACR Pull role for Container App
 var acrPullRole = subscriptionResourceId(
@@ -197,8 +201,8 @@ var acrPullRole = subscriptionResourceId(
   '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 )
 
-resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(containerApp.id, acr.id, acrPullRole)
+resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (createRoleAssignments) {
+  name: guid(resourceGroup().id, containerApp.id, acrPullRole)
   scope: acr
   properties: {
     roleDefinitionId: acrPullRole
@@ -206,6 +210,10 @@ resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-
     principalType: 'ServicePrincipal'
   }
 }
+
+// Note: The Cognitive Services OpenAI User role assignment is handled by
+// the deploy script (az role assignment create) because the OpenAI resource
+// may be in a different resource group/subscription.
 
 // ──────────────────────────────────────────────
 // Outputs

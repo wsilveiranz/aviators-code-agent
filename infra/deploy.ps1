@@ -26,8 +26,13 @@ function Assert-AzSuccess($message) {
 
 # Resolve paths relative to this script's directory
 $InfraDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectRoot = Split-Path -Parent $InfraDir
 $BicepFile = Join-Path $InfraDir "main.bicep"
 $ParamFile = Join-Path $InfraDir "main.bicepparam"
+
+# Ensure we run from project root (needed for Dockerfile and ui/)
+Push-Location $ProjectRoot
+try {
 
 # Configuration
 $SubscriptionName  = "Logic Apps Demo"
@@ -37,19 +42,22 @@ $AcrName           = "acraviators"
 $ContainerAppName  = "ca-aviators-agents"
 $SwaName           = "swa-aviators-ui"
 
+# Azure OpenAI resource (for RBAC - may be in a different RG/subscription)
+$OpenAIResourceId  = "/subscriptions/80d4fe69-c95b-4dd2-a938-9250f1c8ab03/resourceGroups/WSilveira-Sandbox/providers/Microsoft.CognitiveServices/accounts/ws-open-ai"
+
 # Set subscription
-Write-Host "[1/7] Setting subscription '$SubscriptionName'..."
+Write-Host "[1/8] Setting subscription '$SubscriptionName'..."
 az account set --subscription $SubscriptionName
 Assert-AzSuccess "Failed to set subscription. Run 'az login' first."
 
 # Provision infrastructure (Bicep) unless -SkipInfra
 if (-not $SkipInfra) {
-    Write-Host "[2/7] Creating resource group '$ResourceGroup'..."
+    Write-Host "[2/8] Creating resource group '$ResourceGroup'..."
     az group create --name $ResourceGroup --location $Location --output none
     Assert-AzSuccess "Failed to create resource group"
 
     # Ensure ACR exists before building image
-    Write-Host "[3/7] Ensuring container registry '$AcrName' exists..."
+    Write-Host "[3/8] Ensuring container registry '$AcrName' exists..."
     az acr show --name $AcrName --resource-group $ResourceGroup --output none 2>$null
     if ($LASTEXITCODE -ne 0) {
         az acr create --name $AcrName --resource-group $ResourceGroup --location $Location --sku Basic --admin-enabled true --output none
@@ -58,13 +66,20 @@ if (-not $SkipInfra) {
     }
 
     # Build and push container image BEFORE Bicep
-    Write-Host "[4/7] Building and pushing container image to ACR..."
+    Write-Host "[4/8] Building and pushing container image to ACR..."
     $ImageTag = git rev-parse --short HEAD
     az acr build --registry $AcrName --image "aviators-agent:$ImageTag" --image "aviators-agent:latest" .
     Assert-AzSuccess "Container image build failed"
 
-    Write-Host "[5/7] Deploying Bicep template (this may take several minutes)..."
-    $rawOutput = az deployment group create --resource-group $ResourceGroup --template-file $BicepFile --parameters $ParamFile --query "properties.outputs" --output json 2>$null
+    Write-Host "[5/8] Deploying Bicep template (this may take several minutes)..."
+    # Check if this is a redeploy (skip role assignments that already exist)
+    $existingApp = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup --query "identity.principalId" -o tsv 2>$null
+    $roleParam = ""
+    if ($existingApp) {
+        $roleParam = "createRoleAssignments=false"
+        Write-Host "   Redeploy detected, skipping ACR role assignments"
+    }
+    $rawOutput = az deployment group create --resource-group $ResourceGroup --template-file $BicepFile --parameters $ParamFile $roleParam --query "properties.outputs" --output json 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Bicep deployment failed. Check 'az deployment group show -g $ResourceGroup -n main' for details."
         exit 1
@@ -77,10 +92,24 @@ if (-not $SkipInfra) {
     $SwaUrl          = $deployOutput.staticWebAppUrl.value
     $SwaToken        = $deployOutput.staticWebAppDeploymentToken.value
     $AcrLoginServer  = $deployOutput.acrLoginServer.value
+    $PrincipalId     = $deployOutput.containerAppPrincipalId.value
 
     Write-Host "   Infrastructure deployed"
     Write-Host "   Container App: $ContainerAppUrl"
     Write-Host "   Static Web App: $SwaUrl"
+
+    # Assign Cognitive Services OpenAI User role on the OpenAI resource
+    # This is done here (not Bicep) because the OpenAI resource may be in a different RG
+    Write-Host "[6/8] Ensuring RBAC for Azure OpenAI..."
+    $existing = az role assignment list --assignee $PrincipalId --scope $OpenAIResourceId --role "Cognitive Services OpenAI User" --query "length(@)" -o tsv 2>$null
+    if ($existing -eq "0" -or -not $existing) {
+        az role assignment create --assignee $PrincipalId --role "Cognitive Services OpenAI User" --scope $OpenAIResourceId --output none
+        Assert-AzSuccess "Failed to assign OpenAI role"
+        Write-Host "   Cognitive Services OpenAI User role assigned"
+        Write-Host "   Wait ~5 minutes for RBAC propagation on first deploy"
+    } else {
+        Write-Host "   Role assignment already exists"
+    }
 
     if ($InfraOnly) {
         Write-Host ""
@@ -91,7 +120,7 @@ if (-not $SkipInfra) {
 
 # If -SkipInfra, fetch existing resource info and build image
 if ($SkipInfra) {
-    Write-Host "[2/7] Skipping infra, fetching existing resource info..."
+    Write-Host "[2/8] Skipping infra, fetching existing resource info..."
     $AcrLoginServer = az acr show --name $AcrName --query loginServer -o tsv
     Assert-AzSuccess "Failed to get ACR info"
     $ContainerAppFqdn = az containerapp show --name $ContainerAppName --resource-group $ResourceGroup --query "properties.configuration.ingress.fqdn" -o tsv
@@ -100,26 +129,26 @@ if ($SkipInfra) {
     $SwaToken = az staticwebapp secrets list --name $SwaName --query "properties.apiKey" -o tsv
     Assert-AzSuccess "Failed to get SWA token"
 
-    Write-Host "[3/7] Building and pushing container image..."
+    Write-Host "[3/8] Building and pushing container image..."
     $ImageTag = git rev-parse --short HEAD
     az acr build --registry $AcrName --image "aviators-agent:$ImageTag" --image "aviators-agent:latest" .
     Assert-AzSuccess "Container image build failed"
 
-    Write-Host "[4/7] Deploying agent to Container Apps..."
-    az containerapp update --name $ContainerAppName --resource-group $ResourceGroup --image "${AcrLoginServer}/aviators-agent:${ImageTag}"
+    Write-Host "[4/8] Deploying agent to Container Apps..."
+    az containerapp update --name $ContainerAppName --resource-group $ResourceGroup --container-name aviators-agent --image "${AcrLoginServer}/aviators-agent:${ImageTag}"
     Assert-AzSuccess "Container App update failed"
 }
 
 # Build and deploy UI
 Write-Host ""
-Write-Host "[6/7] Building UI..."
+Write-Host "[7/8] Building UI..."
 $env:VITE_API_BASE = $ContainerAppUrl
 Push-Location ui
 npm ci
 npm run build
 Pop-Location
 
-Write-Host "[7/7] Deploying UI to Static Web Apps..."
+Write-Host "[8/8] Deploying UI to Static Web Apps..."
 if (-not (Get-Command swa -ErrorAction SilentlyContinue)) {
     npm install -g @azure/static-web-apps-cli
 }
@@ -131,4 +160,7 @@ Write-Host "Deployment complete!"
 Write-Host "   Agent API:  $ContainerAppUrl"
 Write-Host "   Foundry:    ${ContainerAppUrl}/responses"
 Write-Host ""
-Write-Host "If this is the first deploy, wait ~5 minutes for RBAC propagation."
+
+} finally {
+    Pop-Location
+}
