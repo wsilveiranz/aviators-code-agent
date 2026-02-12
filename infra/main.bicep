@@ -65,6 +65,20 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 }
 
 // ──────────────────────────────────────────────
+// Application Insights (connected to Log Analytics)
+// ──────────────────────────────────────────────
+
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'ai-aviators'
+  location: location
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+  }
+}
+
+// ──────────────────────────────────────────────
 // Container Apps Environment
 // ──────────────────────────────────────────────
 
@@ -146,6 +160,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'EMAIL_MCP_API_KEY', secretRef: 'email-mcp-api-key' }
             { name: 'ALLOWED_ORIGINS', value: 'https://${staticWebApp.properties.defaultHostname}' }
             { name: 'PLAYWRIGHT_MCP_URL', value: 'http://localhost:8080' }
+            { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
           ]
         }
         {
@@ -225,3 +240,4 @@ output staticWebAppUrl string = 'https://${staticWebApp.properties.defaultHostna
 #disable-next-line outputs-should-not-contain-secrets
 output staticWebAppDeploymentToken string = staticWebApp.listSecrets().properties.apiKey
 output containerAppPrincipalId string = containerApp.identity.principalId
+output appInsightsConnectionString string = appInsights.properties.ConnectionString
