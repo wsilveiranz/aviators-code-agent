@@ -4,12 +4,17 @@
  */
 
 import { useAzureMonitor } from '@azure/monitor-opentelemetry';
+import { Resource } from '@opentelemetry/resources';
 
 const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
 
 if (connectionString) {
   useAzureMonitor({
     azureMonitorExporterOptions: { connectionString },
+    resource: new Resource({
+      'service.name': 'aviators-newsletter-agent',
+      'gen_ai.agent.id': 'aviators-newsletter-agent',
+    }),
     instrumentationOptions: {
       http: { enabled: true },
       azureSdk: { enabled: true },
