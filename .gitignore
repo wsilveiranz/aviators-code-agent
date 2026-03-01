@@ -31,3 +31,4 @@ build/
 
 # Saved newsletter state (contains generated content)
 saved/
+infra/main.json

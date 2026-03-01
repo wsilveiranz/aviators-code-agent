@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.*
+.git
+.github
+.vscode
+ui
+test
+docs
+saved
+output
+outputs
+*.md

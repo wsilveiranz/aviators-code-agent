@@ -1,18 +1,21 @@
 /**
  * MCP Client for Playwright
  * Connects to the Playwright MCP server for web scraping capabilities
+ * Supports stdio transport (local dev) and SSE transport (deployed with sidecar)
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import readline from 'readline';
 
-const PLAYWRIGHT_MCP_PATH = 'C:\\dev\\playwright-mcp\\packages\\playwright-mcp\\cli.js';
-const STORAGE_PATH = 'C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-login\\storage.json';
-const LOGIN_SCRIPT_PATH = 'C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-login\\login-linkedin.js';
+const PLAYWRIGHT_MCP_PATH = process.env.PLAYWRIGHT_MCP_PATH || 'C:\\dev\\playwright-mcp\\packages\\playwright-mcp\\cli.js';
+const STORAGE_PATH = process.env.PLAYWRIGHT_STORAGE_PATH || 'C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-login\\storage.json';
+const LOGIN_SCRIPT_PATH = process.env.PLAYWRIGHT_LOGIN_SCRIPT || 'C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-login\\login-linkedin.js';
+const PLAYWRIGHT_MCP_URL = process.env.PLAYWRIGHT_MCP_URL; // e.g. http://localhost:8080
 
 let mcpClient = null;
 let mcpTransport = null;
@@ -92,6 +95,46 @@ export async function connectToPlaywrightMCP(options = {}) {
     return mcpClient;
   }
 
+  // When PLAYWRIGHT_MCP_URL is set, connect via SSE (deployed sidecar)
+  if (PLAYWRIGHT_MCP_URL) {
+    console.log(`[MCP] Connecting to Playwright MCP via SSE at ${PLAYWRIGHT_MCP_URL}...`);
+
+    // In deployed mode, check if storage.json is mounted
+    const storageCheck = isStorageValid(STORAGE_PATH);
+    if (!storageCheck.valid) {
+      console.log(`[MCP] Storage check: ${storageCheck.reason} (LinkedIn scraping may not work)`);
+    } else {
+      console.log(`[MCP] Storage valid with ${storageCheck.cookieCount} LinkedIn cookies`);
+    }
+
+    // Retry connection to handle sidecar startup race condition
+    const sseUrl = PLAYWRIGHT_MCP_URL.endsWith('/sse') ? PLAYWRIGHT_MCP_URL : `${PLAYWRIGHT_MCP_URL}/sse`;
+    const maxRetries = 5;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        mcpTransport = new SSEClientTransport(new URL(sseUrl));
+        mcpClient = new Client({
+          name: 'aviators-code-agent',
+          version: '1.0.0'
+        });
+        await mcpClient.connect(mcpTransport);
+        console.log('[MCP] Connected to Playwright MCP server (SSE)');
+        return mcpClient;
+      } catch (err) {
+        mcpClient = null;
+        mcpTransport = null;
+        if (attempt < maxRetries) {
+          const delay = attempt * 2;
+          console.log(`[MCP] Sidecar not ready (attempt ${attempt}/${maxRetries}), retrying in ${delay}s...`);
+          await new Promise(r => setTimeout(r, delay * 1000));
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
+
+  // Local dev: connect via stdio
   const storagePath = options.storagePath || STORAGE_PATH;
   const headless = options.headless !== false;
   

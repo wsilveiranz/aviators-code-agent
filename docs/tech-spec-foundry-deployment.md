@@ -32,7 +32,6 @@ A full newsletter generation involves dozens of tool calls over several minutes 
 
 ### Out of Scope
 - Rewriting the agent in Python
-- Implementing the Foundry Responses API protocol
 - Changes to skill/tool business logic
 - Changes to the prompt system
 
@@ -50,11 +49,14 @@ A full newsletter generation involves dozens of tool calls over several minutes 
 
 ```
 [Azure Static Web Apps]  →  [Azure Container Apps (Express)]  →  [Azure OpenAI (Managed Identity)]
-     (React UI)                  (Agent + API + SSE)                   (Foundry endpoint)
+     (React UI)                Port 3001: Agent + API + SSE            (Foundry endpoint)
+                               Port 8088: Foundry Responses API
                                         ↕
                                 [Skills / Tools / MCP]
                                         │
                             [Registered in Foundry Catalog]
+                                        │
+                            [Foundry Playground / Clients]
 ```
 
 ### Component Responsibilities
@@ -105,39 +107,40 @@ Remove the hard exit when `AZURE_OPENAI_API_KEY` is not set — MI mode doesn't 
 **File:** new `Dockerfile` (project root)
 
 ```dockerfile
-FROM node:18-slim
+FROM node:20-slim
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --production
 COPY src/ src/
-EXPOSE 3000
-ENV PORT=3000
+EXPOSE 3001 8088
 CMD ["node", "src/server.js"]
 ```
 
-Note: port 3000 (the existing Express port), not 8088 — this is a Container Apps deployment, not a Foundry Responses API container.
+The container exposes two ports: **3001** for the custom REST+SSE API (used by the React UI) and **8088** for the Foundry Responses API (used by Foundry Playground and clients).
 
 ### 3. Deploy Express Server to Azure Container Apps
 
 **Prerequisites:**
-- Azure Container Registry (ACR) in the same resource group
 - Azure Container Apps Environment provisioned
 
-**Deployment steps:**
+**Provision ACR and deploy:**
 
 ```powershell
+# Create ACR
+az acr create --name <ACR_NAME> --resource-group <RG> --sku Basic --admin-enabled true
+
 # Build and push to ACR
 az acr build --registry <ACR_NAME> --image aviators-agent:latest .
 
-# Create Container App with Managed Identity
+# Create Container App with Managed Identity (scale to zero when idle)
 az containerapp create \
   --name aviators-newsletter-agent \
   --resource-group <RG> \
   --environment <CA_ENV> \
   --image <ACR_NAME>.azurecr.io/aviators-agent:latest \
-  --target-port 3000 \
+  --target-port 3001 \
   --ingress external \
-  --min-replicas 1 \
+  --min-replicas 0 \
   --max-replicas 3 \
   --cpu 1 --memory 2Gi \
   --system-assigned \
@@ -145,6 +148,14 @@ az containerapp create \
     AZURE_OPENAI_ENDPOINT=<ENDPOINT> \
     AZURE_OPENAI_API_VERSION=2025-01-01-preview \
     AZURE_OPENAI_MODEL=gpt-5-2
+
+# Set 10-minute request timeout for long-running SSE connections
+az containerapp ingress update \
+  --name aviators-newsletter-agent \
+  --resource-group <RG> \
+  --transport http \
+  --target-port 3001 \
+  --request-timeout 600
 ```
 
 After creation, grant the Container App's system-assigned Managed Identity the **Cognitive Services OpenAI User** role on the Azure OpenAI resource:
@@ -197,38 +208,88 @@ Set `ALLOWED_ORIGINS` env var on the Container App to the Static Web App URL.
 
 ### 6. Configure MCP Servers
 
-Two options for MCP connectivity from Container Apps:
+**Playwright MCP** — deploy as a sidecar container in the same Container App, preserving the current stdio transport:
 
-**Option A: Sidecar containers** — Run Playwright MCP as a sidecar container in the same Container App. This preserves the current stdio transport.
+```powershell
+az containerapp update \
+  --name aviators-newsletter-agent \
+  --resource-group <RG> \
+  --yaml sidecar-config.yaml    # Defines Playwright MCP sidecar
+```
 
-**Option B: External MCP endpoints** — If the MCP servers support HTTP/SSE transport, deploy them as separate Container Apps and connect via URL.
+**EmailCompanion MCP** — no changes needed. The MCP server runs through Logic Apps, which manages the connection with Outlook. The agent calls it via HTTP using the endpoint URL and API key from environment variables (`EMAIL_MCP_ENDPOINT`, `EMAIL_MCP_API_KEY`).
 
-For EmailCompanion MCP, the container needs access to Microsoft Graph — configure via Managed Identity or app registration credentials stored in Azure Key Vault.
+### 7. Foundry Responses API Endpoint
 
-### 7. Register Agent in Foundry Catalog
+**File:** `src/server.js`
 
-Register the Container Apps-hosted agent in the Foundry project catalog for discoverability and governance. This makes the agent visible in the Foundry portal without requiring it to implement the Responses API protocol.
+The Express server exposes POST /responses on the same port as the main API (port **3001**), implementing the [Foundry Responses API protocol](https://learn.microsoft.com/en-us/azure/ai-foundry/agents/concepts/hosted-agents). This enables Foundry Playground and external clients to interact with the agent via the Container Apps ingress URL.
 
-### 8. GitHub Actions CI/CD Pipeline
+**Request:** `POST /responses`
+```json
+{
+  "input": {
+    "messages": [{ "role": "user", "content": "Create the newsletter for June 2025" }]
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "id": "resp_...",
+  "object": "response",
+  "output": [{ "type": "message", "role": "assistant", "content": "..." }],
+  "status": "completed"
+}
+```
+
+The Bicep template configures Container Apps with `additionalPortMappings` to expose port 8088 alongside the primary ingress on port 3001.
+
+### 8. Register Agent in Foundry Catalog
+
+Registration is a **manual portal step** (not automatable via Bicep/CLI currently):
+
+1. Open the Azure AI Foundry portal for the project
+2. Navigate to **Operate → Register agent**
+3. Provide the Container App URL pointing to port 8088 (e.g., `https://ca-aviators-agents.<env-domain>:8088`)
+4. Set protocol to **HTTP**, assign project and agent name
+5. Foundry creates an APIM proxy URL that clients and Playground use
+
+**Prerequisites:**
+- AI Gateway (APIM) must be configured in the Foundry project
+- Container App must be running and accessible via its ingress URL
+
+> **Fallback:** If Foundry requires port 8088 specifically, the deployment will need to be torn down and recreated with a custom VNET on the Container Apps Environment to support dditionalPortMappings with an external second port.
+
+### 9. GitHub Actions CI/CD Pipeline
 
 **File:** new `.github/workflows/deploy.yml`
 
-Automated deployment triggered on push to `main`. Uses [Azure federated credentials (OIDC)](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure-openid-connect) — no secrets stored in the repo beyond the federated identity config.
+Automated deployment triggered on push to `main`. Uses a **service principal with client secret** stored in GitHub Secrets (OIDC federation not available in this tenant).
 
 #### Prerequisites (one-time setup)
 
-1. **Configure OIDC federation** between GitHub and Azure — create a federated credential on the Container App's system-assigned Managed Identity (or a user-assigned MI) that trusts the GitHub Actions token issuer for this repo. This eliminates the need for client secrets or app registrations.
-2. **Store these as GitHub Actions variables/secrets:**
+1. **Create a service principal** with Contributor role on the resource group:
+   ```powershell
+   az ad sp create-for-rbac --name "aviators-gh-deploy" --role Contributor \
+     --scopes /subscriptions/<SUB>/resourceGroups/<RG> --sdk-auth
+   ```
+2. **Store these as GitHub Actions secrets:**
 
-   | Secret/Variable | Value |
-   |-----------------|-------|
-   | `AZURE_CLIENT_ID` | Managed Identity client ID (federated credential subject) |
-   | `AZURE_TENANT_ID` | Entra ID tenant ID |
-   | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
+   | Secret | Value |
+   |--------|-------|
+   | `AZURE_CREDENTIALS` | Full JSON output from `az ad sp create-for-rbac --sdk-auth` |
+   | `STATIC_WEB_APP_TOKEN` | Deployment token for Static Web App (from portal) |
+
+3. **Store these as GitHub Actions variables:**
+
+   | Variable | Value |
+   |----------|-------|
    | `ACR_NAME` | Azure Container Registry name |
    | `CONTAINER_APP_NAME` | Container App name |
    | `RESOURCE_GROUP` | Resource group name |
-   | `STATIC_WEB_APP_TOKEN` | Deployment token for Static Web App (from portal) |
+   | `CONTAINER_APP_URL` | Container App FQDN (e.g., `https://ca-aviators-agents.<env-domain>`) |
 
 #### Workflow Design
 
@@ -238,10 +299,14 @@ name: Deploy Newsletter Agent
 on:
   push:
     branches: [main]
-  workflow_dispatch:        # Allow manual triggers
+  workflow_dispatch:        # Manual trigger on any branch
+    inputs:
+      deploy:
+        description: Deploy after tests pass
+        type: boolean
+        default: true
 
 permissions:
-  id-token: write           # Required for OIDC federated credential
   contents: read
 
 jobs:
@@ -251,7 +316,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
       - run: npm ci
       - run: npm test
 
@@ -261,12 +326,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
+      - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Build and push to ACR
         run: |
@@ -290,7 +353,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
       - name: Build UI
         run: |
@@ -311,19 +374,30 @@ jobs:
 
 - **Test gate** — both deploy jobs depend on `test` passing. No deployment if tests fail.
 - **Parallel deploys** — `deploy-agent` and `deploy-ui` run in parallel after tests pass (they're independent).
-- **OIDC auth** — uses federated credentials, no client secrets to rotate. The GitHub Actions runner gets a short-lived token from Entra ID.
+- **Service principal auth** — uses `az ad sp create-for-rbac --sdk-auth` JSON stored as `AZURE_CREDENTIALS` secret. Rotate periodically.
 - **Image tagging** — each build is tagged with the commit SHA for traceability, plus `latest` for convenience.
-- **Manual trigger** — `workflow_dispatch` allows re-deploying without a code change.
+- **Manual trigger** — `workflow_dispatch` allows manually triggering on any branch (e.g., feature branches for testing) or re-deploying without a code change.
 
-## Risks and Open Questions
+## Resolved Decisions
+
+| Decision | Resolution |
+|----------|-----------|
+| **Cold start vs. cost** | Scale to zero (`minReplicas: 0`) — single user, cost over latency. |
+| **Playwright MCP** | Sidecar container in the same Container App, preserving stdio transport. |
+| **SSE timeout** | Set 10-minute request timeout on Container Apps ingress, test empirically. |
+| **EmailCompanion MCP** | No changes — runs through Logic Apps, manages Outlook connection independently. |
+| **Foundry catalog** | Required — agent must be accessible via Playground and web UI. |
+| **CI/CD auth** | Service principal with client secret (OIDC not available in tenant). |
+| **ACR** | Provision as part of this work. |
+| **Foundry Responses API** | Served on port 3001 (same as main API) via POST /responses. Avoids custom VNET requirement for additional port mappings. Fallback to port 8088 with VNET if Foundry requires it. |
+
+## Remaining Risks
 
 | Item | Detail |
 |------|--------|
-| **MCP sidecar support** | Container Apps supports sidecar containers, but need to verify Playwright MCP Docker image works as a sidecar with stdio transport. |
-| **Cold start** | Container Apps with `minReplicas: 1` avoids cold starts but incurs always-on cost. With `minReplicas: 0`, first request may be slow. |
-| **SSE through ingress** | Verify Azure Container Apps external ingress doesn't buffer/timeout SSE connections (newsletter generation can take several minutes). |
-| **MCP credentials** | EmailCompanion MCP requires Microsoft Graph access — need to determine if Managed Identity or app registration is appropriate. |
-| **Foundry catalog registration** | Verify the process for registering an externally-hosted agent in Foundry's catalog (vs. a natively hosted container). |
+| **MCP sidecar support** | Need to verify Playwright MCP Docker image works as a Container Apps sidecar with stdio transport. |
+| **SSE through ingress** | 10-minute timeout configured, but need to verify Container Apps doesn't buffer SSE event streams. |
+| **Foundry catalog registration** | Registration is a manual portal step. Requires AI Gateway (APIM) configured in Foundry project. |
 
 ## Testing
 
