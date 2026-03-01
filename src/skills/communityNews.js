@@ -90,11 +90,16 @@ export const communityNewsSkill = {
       existingHtml: {
         type: 'string',
         description: 'HTML from a previous createCommunityNews call. When provided, new items are appended to this section instead of creating a new one. Use this when processing URLs in batches.'
+      },
+      hasMore: {
+        type: 'boolean',
+        description: 'Set to true if there are more URL batches to process after this one. When false or omitted, this is the final batch.',
+        default: false
       }
     },
     required: ['items']
   },
-  execute: async ({ items, existingHtml }) => {
+  execute: async ({ items, existingHtml, hasMore = false }) => {
     // Validate items to detect fabrication
     const FAKE_NAMES = ['john doe', 'jane doe', 'jane smith', 'john smith', 'unknown author', 'example author'];
     const fabricatedItems = items.filter(item => {
@@ -127,6 +132,7 @@ export const communityNewsSkill = {
 
     return {
       success: true,
+      isFinalBatch: !hasMore,
       totalItems: items.length,
       validItems: validItems.length,
       items: validItems.map(item => ({

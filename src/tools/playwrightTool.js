@@ -95,7 +95,18 @@ export const scrapeLinkedInTool = {
     }
 
     const succeeded = results.filter(r => r.success).length;
+    const skippedUrls = results.filter(r => !r.success).map(r => ({ url: r.url, reason: r.error || 'Unknown error' }));
     const hasMore = remaining.length > 0;
+
+    // Build explicit message for the LLM
+    const messageParts = [`Batch complete: ${succeeded} of ${batch.length} URLs scraped successfully.`];
+    if (skippedUrls.length > 0) {
+      messageParts.push(`SKIPPED ${skippedUrls.length} URL(s) - report these to the user:`);
+      skippedUrls.forEach(s => messageParts.push(`  - ${s.url}: ${s.reason}`));
+    }
+    if (hasMore) {
+      messageParts.push(`IMPORTANT: ${remaining.length} URL(s) remaining. You MUST call scrapeLinkedIn again with the remainingUrls array to process them.`);
+    }
 
     if (hasMore) {
       console.log(`[scrapeLinkedIn] Batch complete. ${remaining.length} URLs remaining.`);
@@ -103,10 +114,12 @@ export const scrapeLinkedInTool = {
 
     return {
       success: succeeded > 0,
+      message: messageParts.join(' '),
       totalUrls: urlList.length,
       batchSize: batch.length,
       succeeded,
       failed: batch.length - succeeded,
+      skippedUrls,
       hasMore,
       remainingUrls: hasMore ? remaining : [],
       items: results

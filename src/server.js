@@ -726,7 +726,7 @@ app.post('/api/chat/stream', async (req, res) => {
           content: summarizedResult
         });
         
-        // If a section was completed, send update immediately
+        // If a section was completed or updated, send update immediately
         if (result.html) {
           console.log(`[API-Stream] Skill returned HTML: ${result.html.length} chars`);
           const section = detectSection(result.html);
@@ -734,10 +734,18 @@ app.post('/api/chat/stream', async (req, res) => {
           if (section) {
             session.sections[section] = result.html + (section !== 'community' ? '\n<hr>' : '');
             console.log(`[API-Stream] Updated section ${section}: ${session.sections[section].length} chars`);
+            
+            // Differentiate intermediate batch updates from final completion
+            const sectionLabel = section === 'aceAviator' ? 'Ace Aviator' : section === 'productGroup' ? 'Product Group' : 'Community News';
+            const isBatchUpdate = result.isFinalBatch === false;
+            const message = isBatchUpdate 
+              ? `⏳ ${sectionLabel} updated (processing more items...)`
+              : `✓ ${sectionLabel} section completed`;
+            
             sendEvent('section_complete', { 
               section, 
               html: buildNewsletter(session.sections),
-              message: `✓ ${section === 'aceAviator' ? 'Ace Aviator' : section === 'productGroup' ? 'Product Group' : 'Community News'} section completed`
+              message
             });
           }
         }

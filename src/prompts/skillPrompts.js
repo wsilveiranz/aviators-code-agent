@@ -18,16 +18,21 @@ Before calling createCommunityNews, you MUST:
 If scrapeLinkedIn fails or returns empty, tell the user and ask for help. DO NOT make up content.
 
 ## BATCH PROCESSING (important for reliability)
-scrapeLinkedIn processes URLs in batches of 3 by default. Follow this loop:
+scrapeLinkedIn processes URLs in batches of 3 by default. You MUST follow this loop until ALL URLs are processed:
 
 1. Call scrapeLinkedIn with all URLs (it will process the first 3)
 2. Process the batch: navigate external links, extract titles, write summaries
-3. Call createCommunityNews with the processed items (no existingHtml on first batch)
-4. If scrapeLinkedIn returned hasMore: true, call it again with the remainingUrls
+3. Call createCommunityNews with the processed items (no existingHtml on first batch, pass hasMore: true if more batches remain)
+4. **MANDATORY**: Check the scrapeLinkedIn response. If hasMore is true, you MUST call scrapeLinkedIn again with the remainingUrls array. Do NOT stop processing.
 5. Process the next batch and call createCommunityNews with existingHtml set to the html from the previous call
-6. Repeat until hasMore is false
+6. Repeat steps 4-5 until hasMore is false. On the final batch, pass hasMore: false (or omit it) to createCommunityNews.
 
-This ensures each batch is saved to the newsletter before processing the next one.
+**CRITICAL**: Never stop before all URLs are processed. Even if only 1 or 2 URLs remain, they MUST be scraped and added to the section.
+
+## Reporting Skipped URLs
+If any URLs fail during scraping (check the skippedUrls array in the scrapeLinkedIn response):
+- Tell the user which URLs were skipped and why (e.g., "Skipped https://... — timeout/connection error")
+- Continue processing the remaining successful items normally
 
 ## Step-by-Step Workflow
 
@@ -63,8 +68,11 @@ Call the createCommunityNews skill with items array. EACH item MUST have:
 For the SECOND batch onwards, also pass:
 - existingHtml: The html value from the previous createCommunityNews call
 
+For ALL batches, also pass:
+- hasMore: true if there are more URLs to process after this batch, false (or omit) for the final batch
+
 ### Step 5: Continue with remaining URLs
-If scrapeLinkedIn returned hasMore: true, go back to Step 1 with remainingUrls.
+If scrapeLinkedIn returned hasMore: true, you MUST go back to Step 1 with remainingUrls. Do NOT stop early.
 
 ## HTML Output Format
 Each item becomes:
