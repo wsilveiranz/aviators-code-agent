@@ -1,78 +1,38 @@
 /**
  * Playwright Tools
- * Tools for scraping LinkedIn activities and processing URLs
+ * Tools for scraping LinkedIn activities and processing URLs.
+ * Uses the Playwright MCP sidecar (browser_navigate + browser_snapshot).
  */
 
-import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { callMCPTool } from './mcpClient.js';
 
 /**
- * Run a command and return the result
- * @param {string} command 
- * @param {string[]} args 
- * @param {object} options 
- * @returns {Promise<{success: boolean, stdout: string, stderr: string}>}
+ * Extract text content from an MCP snapshot response
+ * @param {object} snapshot
+ * @returns {string}
  */
-function runCommand(command, args, options = {}) {
-  return new Promise((resolve) => {
-    const proc = spawn(command, args, { 
-      shell: true,
-      cwd: options.cwd || process.cwd(),
-      ...options
-    });
-    
-    let stdout = '';
-    let stderr = '';
-    
-    proc.stdout?.on('data', (data) => { stdout += data.toString(); });
-    proc.stderr?.on('data', (data) => { stderr += data.toString(); });
-    
-    proc.on('close', (code) => {
-      resolve({
-        success: code === 0,
-        stdout,
-        stderr,
-        exitCode: code
-      });
-    });
-    
-    proc.on('error', (err) => {
-      resolve({
-        success: false,
-        stdout,
-        stderr: err.message,
-        exitCode: -1
-      });
-    });
-  });
+function snapshotToText(snapshot) {
+  if (snapshot && snapshot.content && Array.isArray(snapshot.content)) {
+    return snapshot.content.map(c => c.text || '').join('\n');
+  }
+  if (typeof snapshot === 'string') return snapshot;
+  return JSON.stringify(snapshot);
 }
 
 export const scrapeLinkedInTool = {
   name: 'scrapeLinkedIn',
-  description: 'Scrape LinkedIn activity URLs to extract author profile and external links. Uses Playwright for browser automation.',
+  description: 'Scrape LinkedIn activity URLs to extract author profile and external links. Uses the Playwright MCP browser. Pass URLs as a JSON array string or an array.',
   parameters: {
     type: 'object',
     properties: {
+      urls: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Array of LinkedIn activity URLs to scrape'
+      },
       inputJson: {
         type: 'string',
-        description: 'Either a path to a JSON file containing URLs array, OR a JSON string array like ["url1","url2"]'
-      },
-      outputJson: {
-        type: 'string',
-        description: 'Path for output JSON file with scraped data'
-      },
-      storagePath: {
-        type: 'string',
-        description: 'Path to Playwright storage.json with login state'
-      },
-      headful: {
-        type: 'boolean',
-        description: 'Run browser in headful mode (visible)',
-        default: false
+        description: '(Legacy) JSON string array of URLs, e.g. \'["url1","url2"]\'. Use "urls" array instead when possible.'
       },
       delayMs: {
         type: 'number',
@@ -80,115 +40,76 @@ export const scrapeLinkedInTool = {
         default: 4000
       }
     },
-    required: ['inputJson', 'outputJson', 'storagePath']
+    required: []
   },
-  execute: async ({ inputJson, outputJson, storagePath, headful = false, delayMs = 4000 }) => {
-    // Find the scraper script - check relative paths
-    const possiblePaths = [
-      path.join(__dirname, '../../.github/tools/playwright-scrape/run-sequential.js'),
-      path.join(process.cwd(), '.github/tools/playwright-scrape/run-sequential.js'),
-      'C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-scrape\\run-sequential.js'
-    ];
-    
-    let scraperPath = null;
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        scraperPath = p;
-        break;
-      }
-    }
-    
-    if (!scraperPath) {
-      return {
-        success: false,
-        error: 'Playwright scraper not found. Ensure run-sequential.js exists in .github/tools/playwright-scrape/'
-      };
-    }
-    
-    // Handle inline JSON array - save to temp file
-    let actualInputPath = inputJson;
-    if (inputJson.trim().startsWith('[')) {
+  execute: async ({ urls, inputJson, delayMs = 4000 }) => {
+    // Resolve URL list from either parameter
+    let urlList = urls;
+    if (!urlList && inputJson) {
       try {
-        const urls = JSON.parse(inputJson);
-        const tempPath = path.join(process.cwd(), 'outputs', `temp-urls-${Date.now()}.json`);
-        fs.mkdirSync(path.dirname(tempPath), { recursive: true });
-        fs.writeFileSync(tempPath, JSON.stringify(urls, null, 2));
-        actualInputPath = tempPath;
-        console.log(`[scrapeLinkedIn] Saved ${urls.length} URLs to temp file: ${tempPath}`);
+        urlList = typeof inputJson === 'string' ? JSON.parse(inputJson) : inputJson;
       } catch (e) {
-        return { success: false, error: `Failed to parse inline JSON: ${e.message}` };
+        return { success: false, error: `Failed to parse inputJson: ${e.message}` };
       }
     }
-    
-    // Check if input file exists
-    if (!fs.existsSync(actualInputPath)) {
-      return { success: false, error: `Input file not found: ${actualInputPath}` };
+
+    if (!Array.isArray(urlList) || urlList.length === 0) {
+      return { success: false, error: 'No URLs provided. Pass a "urls" array or "inputJson" JSON string.' };
     }
-    
-    // Get the scraper directory to use as CWD
-    const scraperDir = path.dirname(scraperPath);
-    
-    // Resolve paths relative to CWD before changing to scraper dir
-    const absoluteInputPath = path.resolve(actualInputPath);
-    const absoluteOutputPath = path.resolve(outputJson);
-    const absoluteStoragePath = path.resolve(storagePath.startsWith('C:') ? storagePath : 
-      path.join('C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-login', storagePath));
-    
-    const args = [
-      scraperPath,
-      '--storage', absoluteStoragePath,
-      '--input', absoluteInputPath,
-      '--out-json', absoluteOutputPath
-    ];
-    
-    if (headful) args.push('--headful');
-    if (delayMs) args.push('--delay-ms', String(delayMs));
-    
-    console.log(`[scrapeLinkedIn] Running from ${scraperDir}: node ${args.join(' ')}`);
-    
-    // Run from the scraper directory so it can find scrape-linkedin.js
-    const result = await runCommand('node', args, { cwd: scraperDir });
-    
-    if (result.success && fs.existsSync(absoluteOutputPath)) {
-      const data = JSON.parse(fs.readFileSync(absoluteOutputPath, 'utf-8'));
-      return {
-        success: true,
-        outputPath: absoluteOutputPath,
-        itemCount: data.length,
-        items: data
-      };
+
+    console.log(`[scrapeLinkedIn] Scraping ${urlList.length} URLs via Playwright MCP`);
+    const results = [];
+
+    for (let i = 0; i < urlList.length; i++) {
+      const url = urlList[i];
+      try {
+        console.log(`[scrapeLinkedIn] [${i + 1}/${urlList.length}] Navigating to ${url}`);
+        await callMCPTool('browser_navigate', { url });
+
+        // Wait for dynamic content to load
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        const snapshot = await callMCPTool('browser_snapshot');
+        const content = snapshotToText(snapshot);
+
+        results.push({ url, success: true, content });
+        console.log(`[scrapeLinkedIn] [${i + 1}/${urlList.length}] Got ${content.length} chars`);
+      } catch (error) {
+        console.error(`[scrapeLinkedIn] [${i + 1}/${urlList.length}] Error: ${error.message}`);
+        results.push({ url, success: false, error: error.message });
+      }
+
+      // Delay between requests to avoid rate limiting
+      if (i < urlList.length - 1 && delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     }
-    
+
+    const succeeded = results.filter(r => r.success).length;
     return {
-      success: false,
-      error: result.stderr || 'Scraping failed',
-      stdout: result.stdout
+      success: succeeded > 0,
+      totalUrls: urlList.length,
+      succeeded,
+      failed: urlList.length - succeeded,
+      items: results
     };
   }
 };
 
 export const resolveRedirectsTool = {
   name: 'resolveRedirects',
-  description: 'Post-process scraped links to resolve redirects and extract final URLs.',
+  description: 'Post-process scraped links to resolve redirects and extract final URLs. Uses the Playwright MCP browser to follow redirects.',
   parameters: {
     type: 'object',
     properties: {
+      urls: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Array of URLs to resolve redirects for'
+      },
       inputJson: {
         type: 'string',
-        description: 'Either a path to a JSON file with scraped data, OR a JSON string'
-      },
-      outputJson: {
-        type: 'string',
-        description: 'Path for output JSON file with resolved URLs'
-      },
-      storagePath: {
-        type: 'string',
-        description: 'Path to Playwright storage.json with login state'
-      },
-      headful: {
-        type: 'boolean',
-        description: 'Run browser in headful mode (visible)',
-        default: false
+        description: '(Legacy) JSON string array of URLs or scraped items with externalLink fields'
       },
       delayMs: {
         type: 'number',
@@ -196,89 +117,64 @@ export const resolveRedirectsTool = {
         default: 1500
       }
     },
-    required: ['inputJson', 'outputJson', 'storagePath']
+    required: []
   },
-  execute: async ({ inputJson, outputJson, storagePath, headful = false, delayMs = 1500 }) => {
-    // Find the post-processor script
-    const possiblePaths = [
-      path.join(__dirname, '../../.github/tools/playwright-scrape/post-process-playwright.js'),
-      path.join(process.cwd(), '.github/tools/playwright-scrape/post-process-playwright.js'),
-      'C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-scrape\\post-process-playwright.js'
-    ];
-    
-    let processorPath = null;
-    for (const p of possiblePaths) {
-      if (fs.existsSync(p)) {
-        processorPath = p;
-        break;
-      }
-    }
-    
-    if (!processorPath) {
-      return {
-        success: false,
-        error: 'Post-processor not found. Ensure post-process-playwright.js exists in .github/tools/playwright-scrape/'
-      };
-    }
-    
-    // Handle inline JSON - save to temp file
-    let actualInputPath = inputJson;
-    if (inputJson.trim().startsWith('[') || inputJson.trim().startsWith('{')) {
+  execute: async ({ urls, inputJson, delayMs = 1500 }) => {
+    // Resolve URL list from either parameter
+    let urlList = urls;
+    if (!urlList && inputJson) {
       try {
-        const data = JSON.parse(inputJson);
-        const tempPath = path.join(process.cwd(), 'outputs', `temp-resolve-${Date.now()}.json`);
-        fs.mkdirSync(path.dirname(tempPath), { recursive: true });
-        fs.writeFileSync(tempPath, JSON.stringify(data, null, 2));
-        actualInputPath = tempPath;
-        console.log(`[resolveRedirects] Saved inline JSON to temp file: ${tempPath}`);
+        const parsed = typeof inputJson === 'string' ? JSON.parse(inputJson) : inputJson;
+        // Support both plain URL arrays and item objects with externalLink
+        if (Array.isArray(parsed)) {
+          urlList = parsed.map(item =>
+            typeof item === 'string' ? item : (item.externalLink || item.url)
+          ).filter(Boolean);
+        }
       } catch (e) {
-        return { success: false, error: `Failed to parse inline JSON: ${e.message}` };
+        return { success: false, error: `Failed to parse inputJson: ${e.message}` };
       }
     }
-    
-    // Check if input file exists
-    if (!fs.existsSync(actualInputPath)) {
-      return { success: false, error: `Input file not found: ${actualInputPath}` };
+
+    if (!Array.isArray(urlList) || urlList.length === 0) {
+      return { success: false, error: 'No URLs provided.' };
     }
-    
-    // Get the processor directory to use as CWD
-    const processorDir = path.dirname(processorPath);
-    
-    // Resolve paths to absolute
-    const absoluteInputPath = path.resolve(actualInputPath);
-    const absoluteOutputPath = path.resolve(outputJson);
-    const absoluteStoragePath = path.resolve(storagePath.startsWith('C:') ? storagePath : 
-      path.join('C:\\dev\\aviator-newsletter-agent\\.github\\tools\\playwright-login', storagePath));
-    
-    const args = [
-      processorPath,
-      '--in-json', absoluteInputPath,
-      '--out-json', absoluteOutputPath,
-      '--storage', absoluteStoragePath
-    ];
-    
-    if (headful) args.push('--headful');
-    if (delayMs) args.push('--delay-ms', String(delayMs));
-    
-    console.log(`[resolveRedirects] Running from ${processorDir}: node ${args.join(' ')}`);
-    
-    // Run from the processor directory
-    const result = await runCommand('node', args, { cwd: processorDir });
-    
-    if (result.success && fs.existsSync(absoluteOutputPath)) {
-      const data = JSON.parse(fs.readFileSync(absoluteOutputPath, 'utf-8'));
-      return {
-        success: true,
-        outputPath: absoluteOutputPath,
-        itemCount: data.length,
-        items: data
-      };
+
+    console.log(`[resolveRedirects] Resolving ${urlList.length} URLs via Playwright MCP`);
+    const results = [];
+
+    for (let i = 0; i < urlList.length; i++) {
+      const originalUrl = urlList[i];
+      try {
+        // Navigate — browser follows redirects automatically
+        const navResult = await callMCPTool('browser_navigate', { url: originalUrl });
+
+        // Extract final URL from navigation result
+        let finalUrl = originalUrl;
+        if (navResult && navResult.content && Array.isArray(navResult.content)) {
+          const text = navResult.content.map(c => c.text || '').join('\n');
+          // MCP navigate typically returns the page title/URL in the response
+          const urlMatch = text.match(/https?:\/\/[^\s)>\]"]+/);
+          if (urlMatch) finalUrl = urlMatch[0];
+        }
+
+        results.push({ originalUrl, finalUrl, success: true });
+        console.log(`[resolveRedirects] [${i + 1}/${urlList.length}] ${originalUrl} → ${finalUrl}`);
+      } catch (error) {
+        console.error(`[resolveRedirects] [${i + 1}/${urlList.length}] Error: ${error.message}`);
+        results.push({ originalUrl, finalUrl: originalUrl, success: false, error: error.message });
+      }
+
+      if (i < urlList.length - 1 && delayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
     }
-    
+
     return {
-      success: false,
-      error: result.stderr || 'Post-processing failed',
-      stdout: result.stdout
+      success: true,
+      totalUrls: urlList.length,
+      resolved: results.filter(r => r.originalUrl !== r.finalUrl).length,
+      items: results
     };
   }
 };
