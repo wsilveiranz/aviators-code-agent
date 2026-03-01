@@ -17,15 +17,25 @@ Before calling createCommunityNews, you MUST:
 
 If scrapeLinkedIn fails or returns empty, tell the user and ask for help. DO NOT make up content.
 
+## BATCH PROCESSING (important for reliability)
+scrapeLinkedIn processes URLs in batches of 3 by default. Follow this loop:
+
+1. Call scrapeLinkedIn with all URLs (it will process the first 3)
+2. Process the batch: navigate external links, extract titles, write summaries
+3. Call createCommunityNews with the processed items (no existingHtml on first batch)
+4. If scrapeLinkedIn returned hasMore: true, call it again with the remainingUrls
+5. Process the next batch and call createCommunityNews with existingHtml set to the html from the previous call
+6. Repeat until hasMore is false
+
+This ensures each batch is saved to the newsletter before processing the next one.
+
 ## Step-by-Step Workflow
 
-### Step 1: Scrape LinkedIn Activities
+### Step 1: Scrape LinkedIn Activities (in batches)
 Call scrapeLinkedIn tool with:
-- inputJson: Array of LinkedIn URLs like ["https://linkedin.com/feed/update/..."]
-- outputJson: Path like "outputs/community-scraped.json"
-- storagePath: "storage.json"
+- urls: Array of LinkedIn URLs like ["https://linkedin.com/feed/update/..."]
 
-This returns items with: postUrl, authorProfile, authorName, externalLink, itemKind
+The tool returns: items (scraped content), hasMore, remainingUrls.
 
 ### Step 2: Navigate to External Links
 For EACH item from Step 1, call playwright_navigate with the externalLink URL.
@@ -49,6 +59,12 @@ Call the createCommunityNews skill with items array. EACH item MUST have:
 - authorName: Author's name (from scrapeLinkedIn result)
 - summary: Your 80-100 word summary (based on actual content)
 - itemKind: "Post" or "Video" (from scrapeLinkedIn result)
+
+For the SECOND batch onwards, also pass:
+- existingHtml: The html value from the previous createCommunityNews call
+
+### Step 5: Continue with remaining URLs
+If scrapeLinkedIn returned hasMore: true, go back to Step 1 with remainingUrls.
 
 ## HTML Output Format
 Each item becomes:

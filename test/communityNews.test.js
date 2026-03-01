@@ -151,5 +151,116 @@ if (test('Should preserve author information', () => {
 
 console.log(`\n=== Results: ${passed} passed, ${failed} failed ===\n`);
 
-// Export for use
-export { transformLinkedInPosts, extractLinkedArticle, generateCommunityItemHtml };
+// ========== BATCH & APPEND MODE TESTS ==========
+// These test the communityNews skill's append behavior
+
+import { communityNewsSkill, generateItemHTML } from '../src/skills/communityNews.js';
+
+console.log('\n=== Community News Batch & Append Tests ===\n');
+
+let passed2 = 0;
+let failed2 = 0;
+
+const sampleItems = [
+  {
+    externalLink: 'https://example.com/article1',
+    title: 'Article One',
+    authorProfile: 'https://linkedin.com/in/author1',
+    authorName: 'Author One',
+    summary: 'Summary of article one.',
+    itemKind: 'Post'
+  },
+  {
+    externalLink: 'https://example.com/article2',
+    title: 'Article Two',
+    authorProfile: 'https://linkedin.com/in/author2',
+    authorName: 'Author Two',
+    summary: 'Summary of article two.',
+    itemKind: 'Video'
+  }
+];
+
+const sampleItems2 = [
+  {
+    externalLink: 'https://example.com/article3',
+    title: 'Article Three',
+    authorProfile: 'https://linkedin.com/in/author3',
+    authorName: 'Author Three',
+    summary: 'Summary of article three.',
+    itemKind: 'Post'
+  }
+];
+
+// Test: First batch creates section with header
+if (await (async () => {
+  try {
+    const result = await communityNewsSkill.execute({ items: sampleItems });
+    assertTrue(result.success, 'Should succeed');
+    assertTrue(result.html.includes('<h1 id="communitynews">'), 'Should have section header');
+    assertTrue(result.html.includes('Article One'), 'Should have first article');
+    assertTrue(result.html.includes('Article Two'), 'Should have second article');
+    assertEqual(result.validItems, 2, 'Should have 2 valid items');
+    console.log('✓ First batch creates section with header');
+    return true;
+  } catch (err) {
+    console.log(`✗ First batch creates section with header\n  Error: ${err.message}`);
+    return false;
+  }
+})()) passed2++; else failed2++;
+
+// Test: Append mode adds items without duplicating header
+if (await (async () => {
+  try {
+    const firstResult = await communityNewsSkill.execute({ items: sampleItems });
+    const appendResult = await communityNewsSkill.execute({ items: sampleItems2, existingHtml: firstResult.html });
+    assertTrue(appendResult.success, 'Should succeed');
+    // Should have exactly ONE h1 header (from existing, not duplicated)
+    const h1Count = (appendResult.html.match(/<h1 id="communitynews">/g) || []).length;
+    assertEqual(h1Count, 1, 'Should have exactly one section header');
+    // Should have all 3 articles
+    assertTrue(appendResult.html.includes('Article One'), 'Should keep first article');
+    assertTrue(appendResult.html.includes('Article Two'), 'Should keep second article');
+    assertTrue(appendResult.html.includes('Article Three'), 'Should have new article');
+    console.log('✓ Append mode adds items without duplicating header');
+    return true;
+  } catch (err) {
+    console.log(`✗ Append mode adds items without duplicating header\n  Error: ${err.message}`);
+    return false;
+  }
+})()) passed2++; else failed2++;
+
+// Test: Append mode returns correct item count for current batch only
+if (await (async () => {
+  try {
+    const firstResult = await communityNewsSkill.execute({ items: sampleItems });
+    const appendResult = await communityNewsSkill.execute({ items: sampleItems2, existingHtml: firstResult.html });
+    assertEqual(appendResult.validItems, 1, 'Should report 1 new valid item');
+    assertEqual(appendResult.totalItems, 1, 'Should report 1 total item in this batch');
+    console.log('✓ Append mode returns correct item count for current batch');
+    return true;
+  } catch (err) {
+    console.log(`✗ Append mode returns correct item count for current batch\n  Error: ${err.message}`);
+    return false;
+  }
+})()) passed2++; else failed2++;
+
+// Test: Fabrication detection still works in append mode
+if (await (async () => {
+  try {
+    const firstResult = await communityNewsSkill.execute({ items: sampleItems });
+    const fakeItems = [{ externalLink: 'https://example.com/fake', title: 'Fake', authorName: 'John Doe', authorProfile: '#', summary: 'Fake', itemKind: 'Post' }];
+    const appendResult = await communityNewsSkill.execute({ items: fakeItems, existingHtml: firstResult.html });
+    assertEqual(appendResult.success, false, 'Should reject fabricated data');
+    // Existing HTML should be preserved in error response
+    assertTrue(appendResult.html.includes('Article One'), 'Should preserve existing HTML on error');
+    console.log('✓ Fabrication detection works in append mode');
+    return true;
+  } catch (err) {
+    console.log(`✗ Fabrication detection works in append mode\n  Error: ${err.message}`);
+    return false;
+  }
+})()) passed2++; else failed2++;
+
+console.log(`\n=== Results: ${passed2} passed, ${failed2} failed ===\n`);
+
+if (failed > 0 || failed2 > 0) process.exit(1);

@@ -68,7 +68,7 @@ ${itemsHtml}`;
 
 export const communityNewsSkill = {
   name: 'createCommunityNews',
-  description: 'Build Community section from processed LinkedIn activity data. REQUIRES actual scraped data from scrapeLinkedIn tool - do NOT pass fabricated data.',
+  description: 'Build Community section from processed LinkedIn activity data. REQUIRES actual scraped data from scrapeLinkedIn tool - do NOT pass fabricated data. When processing batches, pass existingHtml from the previous call to append new items.',
   parameters: {
     type: 'object',
     properties: {
@@ -86,11 +86,15 @@ export const communityNewsSkill = {
             itemKind: { type: 'string', description: 'Type of content: Post or Video' }
           }
         }
+      },
+      existingHtml: {
+        type: 'string',
+        description: 'HTML from a previous createCommunityNews call. When provided, new items are appended to this section instead of creating a new one. Use this when processing URLs in batches.'
       }
     },
     required: ['items']
   },
-  execute: async ({ items }) => {
+  execute: async ({ items, existingHtml }) => {
     // Validate items to detect fabrication
     const FAKE_NAMES = ['john doe', 'jane doe', 'jane smith', 'john smith', 'unknown author', 'example author'];
     const fabricatedItems = items.filter(item => {
@@ -104,12 +108,22 @@ export const communityNewsSkill = {
         success: false,
         error: 'Fabricated data detected. You must call scrapeLinkedIn first to get real author data.',
         fabricatedNames: fabricatedItems.map(i => i.authorName),
-        html: '<h1 id="communitynews">News from our community</h1>\n<p><em>Error: Please use scrapeLinkedIn to get real data first.</em></p>'
+        html: existingHtml || '<h1 id="communitynews">News from our community</h1>\n<p><em>Error: Please use scrapeLinkedIn to get real data first.</em></p>'
       };
     }
     
     const validItems = filterValidItems(items);
-    const html = generateHTML(items);
+
+    let html;
+    if (existingHtml) {
+      // Append mode: add new items to existing section HTML
+      const newItemsHtml = validItems.map(generateItemHTML).join('\n');
+      html = existingHtml + '\n' + newItemsHtml;
+      console.log(`[CommunityNews] Appended ${validItems.length} items to existing section`);
+    } else {
+      html = generateHTML(items);
+      console.log(`[CommunityNews] Created new section with ${validItems.length} items`);
+    }
 
     return {
       success: true,

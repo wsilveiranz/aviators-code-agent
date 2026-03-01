@@ -21,7 +21,7 @@ function snapshotToText(snapshot) {
 
 export const scrapeLinkedInTool = {
   name: 'scrapeLinkedIn',
-  description: 'Scrape LinkedIn activity URLs to extract author profile and external links. Uses the Playwright MCP browser. Pass URLs as a JSON array string or an array.',
+  description: 'Scrape LinkedIn activity URLs in batches. Processes up to batchSize (default 3) URLs per call. When hasMore is true in the response, call again with the remainingUrls to continue. Append results from each batch to the community section using createCommunityNews with existingHtml.',
   parameters: {
     type: 'object',
     properties: {
@@ -34,6 +34,11 @@ export const scrapeLinkedInTool = {
         type: 'string',
         description: '(Legacy) JSON string array of URLs, e.g. \'["url1","url2"]\'. Use "urls" array instead when possible.'
       },
+      batchSize: {
+        type: 'number',
+        description: 'Max URLs to process per call (default 3). Remaining URLs are returned for the next call.',
+        default: 3
+      },
       delayMs: {
         type: 'number',
         description: 'Delay between requests in milliseconds',
@@ -42,7 +47,7 @@ export const scrapeLinkedInTool = {
     },
     required: []
   },
-  execute: async ({ urls, inputJson, delayMs = 4000 }) => {
+  execute: async ({ urls, inputJson, batchSize = 3, delayMs = 4000 }) => {
     // Resolve URL list from either parameter
     let urlList = urls;
     if (!urlList && inputJson) {
@@ -57,13 +62,17 @@ export const scrapeLinkedInTool = {
       return { success: false, error: 'No URLs provided. Pass a "urls" array or "inputJson" JSON string.' };
     }
 
-    console.log(`[scrapeLinkedIn] Scraping ${urlList.length} URLs via Playwright MCP`);
+    // Split into current batch and remaining
+    const batch = urlList.slice(0, batchSize);
+    const remaining = urlList.slice(batchSize);
+
+    console.log(`[scrapeLinkedIn] Processing batch of ${batch.length}/${urlList.length} URLs via Playwright MCP`);
     const results = [];
 
-    for (let i = 0; i < urlList.length; i++) {
-      const url = urlList[i];
+    for (let i = 0; i < batch.length; i++) {
+      const url = batch[i];
       try {
-        console.log(`[scrapeLinkedIn] [${i + 1}/${urlList.length}] Navigating to ${url}`);
+        console.log(`[scrapeLinkedIn] [${i + 1}/${batch.length}] Navigating to ${url}`);
         await callMCPTool('browser_navigate', { url });
 
         // Wait for dynamic content to load
@@ -73,24 +82,33 @@ export const scrapeLinkedInTool = {
         const content = snapshotToText(snapshot);
 
         results.push({ url, success: true, content });
-        console.log(`[scrapeLinkedIn] [${i + 1}/${urlList.length}] Got ${content.length} chars`);
+        console.log(`[scrapeLinkedIn] [${i + 1}/${batch.length}] Got ${content.length} chars`);
       } catch (error) {
-        console.error(`[scrapeLinkedIn] [${i + 1}/${urlList.length}] Error: ${error.message}`);
+        console.error(`[scrapeLinkedIn] [${i + 1}/${batch.length}] Error: ${error.message}`);
         results.push({ url, success: false, error: error.message });
       }
 
       // Delay between requests to avoid rate limiting
-      if (i < urlList.length - 1 && delayMs > 0) {
+      if (i < batch.length - 1 && delayMs > 0) {
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
     }
 
     const succeeded = results.filter(r => r.success).length;
+    const hasMore = remaining.length > 0;
+
+    if (hasMore) {
+      console.log(`[scrapeLinkedIn] Batch complete. ${remaining.length} URLs remaining.`);
+    }
+
     return {
       success: succeeded > 0,
       totalUrls: urlList.length,
+      batchSize: batch.length,
       succeeded,
-      failed: urlList.length - succeeded,
+      failed: batch.length - succeeded,
+      hasMore,
+      remainingUrls: hasMore ? remaining : [],
       items: results
     };
   }
