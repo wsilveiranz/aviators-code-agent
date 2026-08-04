@@ -1,460 +1,226 @@
-# Architecture Documentation
+# Aviators Newsletter extension architecture
 
 ## Overview
 
-The Logic Apps Aviators Newsletter Agent is an AI-powered application that automates the creation of the Logic Apps Aviators Newsletter. It uses Azure OpenAI (GPT-5.2) as the reasoning engine, with a modular skill and tool architecture that enables the LLM to gather data from multiple sources and generate formatted HTML content.
-
-## Tech Stack
-
-### Agent Core & AI
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **LLM Provider** | Azure OpenAI (GPT-5.2) | Reasoning engine for orchestration and content generation |
-| **OpenAI SDK** | `openai` v6.17.0 | Azure OpenAI client with function calling support |
-| **MCP SDK** | `@modelcontextprotocol/sdk` v1.25.3 | Model Context Protocol for tool integration |
-
-### Backend
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Runtime** | Node.js 18+ | Server-side JavaScript execution |
-| **Web Framework** | Express 5.x | REST API and SSE streaming endpoints |
-| **Environment** | dotenv | Secure configuration management |
-
-### Frontend
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **UI Framework** | React 19 | Component-based user interface |
-| **Build Tool** | Vite 7.x | Fast development server and bundler |
-| **Styling** | CSS (custom) | Tech Community-inspired preview styling |
-
-### External Integrations
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **Browser Automation** | Playwright 1.42 | Web scraping via MCP server |
-| **Email Access** | EmailCompanion MCP | Microsoft Graph API for Outlook |
-
-### Agentic Architecture
-
-The agent uses a **tool-calling loop pattern** with the OpenAI SDK:
-
-```mermaid
-graph LR
-    subgraph "OpenAI SDK Integration"
-        Client[AzureOpenAI Client]
-        FuncCall[Function Calling API]
-        Tools[tools array]
-    end
-    
-    subgraph "Agent Loop"
-        Request[Chat Request]
-        Response[Parse Response]
-        Execute[Execute Tools]
-        Collect[Collect Results]
-    end
-    
-    Client --> FuncCall
-    FuncCall --> Tools
-    Request --> Client
-    Client --> Response
-    Response -->|tool_calls| Execute
-    Execute --> Collect
-    Collect -->|tool results| Request
-```
-
-**Key SDK Usage:**
-- `AzureOpenAI` client from `openai` package connects to Azure endpoints
-- Tools/skills defined as JSON Schema and passed via `tools` parameter
-- `tool_choice: 'auto'` allows model to decide which tools to call
-- Sequential tool execution loop until model returns final response
-- MCP SDK provides stdio transport for Playwright and Email tool servers
-
-```mermaid
-graph TB
-    subgraph "Frontend"
-        UI[React UI<br/>Vite + React]
-    end
-    
-    subgraph "Backend"
-        Server[Express Server<br/>server.js]
-        Agent[Agent Core<br/>agent.js]
-        Prompts[Skill Prompts<br/>skillPrompts.js]
-    end
-    
-    subgraph "Skills"
-        DateWindow[Date Window]
-        AceAviator[Ace Aviator]
-        ProductGroup[Product Group]
-        CommunityNews[Community News]
-    end
-    
-    subgraph "Tools"
-        EmailMCP[Email MCP Client]
-        PlaywrightMCP[Playwright MCP Client]
-        LinkedIn[LinkedIn Scraper]
-        TechCommunity[Tech Community Blog]
-    end
-    
-    subgraph "External Services"
-        AzureOpenAI[Azure OpenAI<br/>GPT-5.2]
-        Outlook[LogicApps workflow/Office365 Connector]
-        Browser[Headless Browser]
-    end
-    
-    UI -->|SSE Stream| Server
-    Server --> Agent
-    Server --> Prompts
-    Agent --> Skills
-    Agent --> Tools
-    Server -->|Chat API| AzureOpenAI
-    EmailMCP -->|MCP Protocol| Outlook
-    PlaywrightMCP -->|MCP Protocol| Browser
-```
-
-## System Components
-
-### 1. Frontend (UI)
-
-**Location:** `ui/`
-
-The frontend is a React single-page application built with Vite.
-
-| File | Purpose |
-|------|---------|
-| `App.jsx` | Main component with chat interface and newsletter preview |
-| `App.css` | Styling including Tech Community blog preview styles |
-| `index.html` | Entry point with Logic Apps favicon |
-
-**Key Features:**
-- Split-pane layout: Chat on left, HTML preview on right
-- Server-Sent Events (SSE) for real-time section updates
-- Copy HTML to clipboard functionality
-- Session persistence (save/load newsletter state)
-
-### 2. Backend Server
-
-**Location:** `src/server.js`
-
-Express.js server that orchestrates the AI agent loop.
-
-```mermaid
-sequenceDiagram
-    participant UI as Frontend
-    participant Server as Express Server
-    participant LLM as Azure OpenAI
-    participant Tools as Skills/Tools
-    
-    UI->>Server: POST /api/chat/stream
-    Server->>Server: Detect required skills
-    Server->>Server: Build dynamic prompt
-    Server->>LLM: Chat completion request
-    
-    loop Tool Calling Loop
-        LLM-->>Server: tool_calls[]
-        Server->>Tools: Execute tool/skill
-        Tools-->>Server: Result (JSON/HTML)
-        Server-->>UI: SSE: tool_start, tool_end
-        alt Section Complete
-            Server-->>UI: SSE: section_complete + HTML
-        end
-        Server->>LLM: Tool results
-    end
-    
-    LLM-->>Server: Final response
-    Server-->>UI: SSE: complete + full HTML
-```
-
-**Key Endpoints:**
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/chat/stream` | POST | Streaming chat with SSE updates |
-| `/api/chat` | POST | Non-streaming chat (legacy) |
-| `/api/template` | GET | Get empty newsletter template |
-| `/api/newsletter/save` | POST | Save newsletter to disk |
-| `/api/newsletter/load` | GET | Load saved newsletter |
-| `/api/session/:id` | DELETE | Clear session |
-
-**Session Management:**
-- Sessions stored in-memory (`Map`)
-- Each session tracks: messages, sections, loaded skills
-- Sections are updated incrementally as skills complete
-
-### 3. Agent Core
-
-**Location:** `src/agent.js`
-
-Central configuration and registry for skills and tools.
-
-```mermaid
-graph LR
-    subgraph "Agent Core"
-        Config[agentConfig]
-        SkillRegistry["skills map"]
-        ToolRegistry["tools map"]
-    end
-    
-    subgraph "Exports"
-        ExecuteSkill[executeSkill]
-        ExecuteTool[executeTool]
-        GetDefs[getSkillDefinitions<br/>getToolDefinitions]
-    end
-    
-    Config --> ExecuteSkill
-    SkillRegistry --> ExecuteSkill
-    ToolRegistry --> ExecuteTool
-    SkillRegistry --> GetDefs
-    ToolRegistry --> GetDefs
-```
-
-**Agent Configuration:**
-```javascript
-{
-  name: 'Logic Apps Aviators Newsletter Editor',
-  modes: { discover, create, edit },
-  structure: [toc, aceAviator, productNews, communityNews],
-  guardrails: ['No fabrication', 'Use only provided context', ...]
-}
-```
-
-### 4. Skills
-
-Skills are high-level operations that generate newsletter sections. Each skill:
-- Has a name, description, and JSON Schema parameters
-- Returns structured data including HTML output
-- Is callable by the LLM via function calling
-
-**Location:** `src/skills/`
-
-```mermaid
-graph TB
-    subgraph "Skills"
-        DW[computeDateWindow]
-        AA[createAceAviator]
-        PG[createProductGroupNews]
-        CN[createCommunityNews]
-    end
-    
-    subgraph "Inputs"
-        Month[Month string]
-        Email[Email Q&A]
-        Posts[Blog posts]
-        Items[LinkedIn items]
-    end
-    
-    subgraph "Outputs"
-        DateRange[PST date range]
-        AceHTML[Ace Aviator HTML]
-        ProdHTML[Product Group HTML]
-        CommHTML[Community HTML]
-    end
-    
-    Month --> DW --> DateRange
-    Email --> AA --> AceHTML
-    Posts --> PG --> ProdHTML
-    Items --> CN --> CommHTML
-```
-
-| Skill | File | Purpose |
-|-------|------|---------|
-| `computeDateWindow` | `dateWindow.js` | Calculate PST newsletter window (first Tuesday → first Sunday) |
-| `createAceAviator` | `aceAviator.js` | Generate Q&A section from email interview |
-| `createProductGroupNews` | `productGroup.js` | Generate table of Tech Community blog posts |
-| `createCommunityNews` | `communityNews.js` | Generate community contribution summaries |
-
-### 5. Tools
-
-Tools are lower-level operations for data retrieval. They interface with external services via MCP (Model Context Protocol) or direct execution.
-
-**Location:** `src/tools/`
-
-```mermaid
-graph TB
-    subgraph "MCP Tools"
-        EmailTool[getEmailFromMCP]
-        NavTool[playwright_navigate]
-        SnapTool[playwright_snapshot]
-        ClickTool[playwright_click]
-        TypeTool[playwright_type]
-    end
-    
-    subgraph "Direct Tools"
-        ScrapeTool[scrapeLinkedIn]
-        ResolveTool[resolveRedirects]
-        BlogTool[getTechCommunityBlogPosts]
-    end
-    
-    subgraph "MCP Servers"
-        EmailMCP[EmailCompanion MCP]
-        PlaywrightMCP[Playwright MCP]
-    end
-    
-    EmailTool --> EmailMCP
-    NavTool --> PlaywrightMCP
-    SnapTool --> PlaywrightMCP
-    ClickTool --> PlaywrightMCP
-    TypeTool --> PlaywrightMCP
-```
-
-| Tool | File | Purpose |
-|------|------|---------|
-| `getEmailFromMCP` | `emailMcpClient.js` | Search and retrieve emails via Graph API |
-| `playwright_navigate` | `mcpClient.js` | Navigate browser to URL, get page content |
-| `playwright_snapshot` | `mcpClient.js` | Take accessibility snapshot of page |
-| `scrapeLinkedIn` | `playwrightTool.js` | Scrape LinkedIn activity posts |
-| `getTechCommunityBlogPosts` | `mcpClient.js` | Fetch Tech Community blog listing |
-
-### 6. Skill Prompts
-
-**Location:** `src/prompts/skillPrompts.js`
-
-Dynamic prompt loading system that injects detailed skill instructions only when needed.
+Aviators Newsletter is a Visual Studio Code extension. It does not host an Express API, web UI, or model endpoint. GitHub Copilot Chat supplies the selected language model, VS Code supplies the chat/tool/MCP APIs, and the extension supplies newsletter orchestration, deterministic section builders, MCP-backed data tools, and workspace HTML output.
 
 ```mermaid
 flowchart LR
-    UserMsg[User Message] --> Detect[detectRequiredSkills]
-    Detect --> Skills[Skill Keys]
-    Skills --> Build[buildDynamicPrompt]
-    BasePrompt[BASE_SYSTEM_PROMPT] --> Build
-    Build --> FullPrompt[Full System Prompt]
+    User[Copilot Chat user] --> Participant["@aviators participant"]
+    Picker[Copilot model picker] --> RequestModel["ChatRequest.request.model"]
+    RequestModel --> Participant
+    Participant --> LM["VS Code Language Model API"]
+    LM --> LocalTools["Seven Aviators LM tools"]
+    LocalTools --> Core["Core skills and registry"]
+    LocalTools --> Bridge["LmToolBridge"]
+    Bridge --> NativeMCP["VS Code native MCP tools"]
+    NativeMCP --> Playwright["Playwright stdio MCP"]
+    NativeMCP --> Email["EmailCompanion HTTP MCP"]
+    Core --> Output["Workspace newsletter HTML"]
 ```
 
-**Skill Detection:**
-- Analyzes user message for keywords
-- Returns array of skill keys to load
-- "create newsletter for February" → loads all skills
-- "update ace aviator" → loads only aceAviator skill
+## Runtime components
 
-## Data Flow
+| Component | Location | Responsibility |
+|---|---|---|
+| Extension activation | `src/extension/extension.ts` | Register the participant, tools, commands, output manager, LinkedIn session commands, and MCP provider. |
+| Chat participant | `src/extension/participant.ts` | Route slash commands, build prompts, use `request.model`, run the tool loop, enforce limits, and stream chat output. |
+| Language-model tools | `src/extension/toolRegistry.ts` | Register four local section/date tools and three MCP-backed data tools. |
+| MCP bridge | `src/extension/lmToolBridge.ts` | Resolve MCP tool names from `vscode.lm.tools` and invoke them with the chat request's tool token. |
+| Native MCP provider | `src/extension/mcpProvider.ts` | Programmatically define Playwright stdio and EmailCompanion HTTP servers. |
+| Configuration/secrets | `src/extension/config.ts` | Read VS Code settings and store/read/delete the EmailCompanion API key through `SecretStorage`. |
+| LinkedIn session | `src/extension/linkedinSession.ts` | Launch a headed Playwright MCP process, require manual sign-in/verification, save storage state, and validate cookies. |
+| Output | `src/extension/output.ts` | Detect section HTML, safely merge it into a workspace file, and open previews. |
+| Core registry | `src/core/agent.ts` | Define four deterministic skills and MCP-backed core tool definitions. |
+| Core prompts | `src/core/skillPrompts.ts` | Provide workflow-specific prompts and anti-fabrication rules. |
+| Newsletter utilities | `src/core/newsletter.ts` | Parse Q&A, detect section anchors, summarize tool results, and assemble the document. |
 
-### Newsletter Generation Flow
+## Activation and contributions
 
-```mermaid
-flowchart TB
-    Start([User: Create newsletter for Feb 2026])
-    
-    subgraph "1. Ace Aviator"
-        A1[getEmailFromMCP] --> A2[Parse Q&A from email]
-        A2 --> A3[createAceAviator skill]
-        A3 --> A4[Ace Aviator HTML]
-    end
-    
-    subgraph "2. Product Group"
-        B1[computeDateWindow] --> B2[getTechCommunityBlogPosts]
-        B2 --> B3[playwright_navigate per post]
-        B3 --> B4[createProductGroupNews skill]
-        B4 --> B5[Product Group HTML]
-    end
-    
-    subgraph "3. Community News"
-        C1[scrapeLinkedIn] --> C2[playwright_navigate per link]
-        C2 --> C3[createCommunityNews skill]
-        C3 --> C4[Community HTML]
-    end
-    
-    Start --> A1
-    A4 --> B1
-    B5 --> C1
-    C4 --> Complete([Full Newsletter])
-```
+`package.json` declares:
 
-### Section Update Flow
+- Chat participant ID `aviators.newsletter`, exposed as `@aviators`.
+- Slash commands `/newsletter`, `/ace`, `/product`, `/community`, and `/preview`.
+- Seven language-model tools.
+- Four Command Palette commands.
+- Six `aviators.*` settings.
+- MCP server definition provider ID `aviators.newsletter`.
+- Extension entry point `dist/extension.cjs`.
+
+`activate()` creates shared runtime objects and adds every registration/disposable to the extension context. The extension is activated by its participant, tools, commands, or MCP provider.
+
+## Chat request flow
 
 ```mermaid
 sequenceDiagram
-    participant Skill
-    participant Server
-    participant Session
-    participant UI
-    
-    Skill->>Server: Return { html, success }
-    Server->>Server: detectSection(html)
-    Server->>Session: sections[sectionId] = html
-    Server->>Server: buildNewsletter(sections)
-    Server->>UI: SSE section_complete event
-    UI->>UI: Update preview immediately
+    participant User
+    participant Chat as @aviators
+    participant Model as request.model
+    participant Tool as Aviators LM tool
+    participant MCP as VS Code MCP tool
+    participant File as Workspace HTML
+
+    User->>Chat: Prompt or slash command
+    Chat->>Chat: Select workflow prompts and history
+    Chat->>Model: sendRequest(messages, seven tools)
+    loop Until the model stops or maxToolRounds is reached
+        Model-->>Chat: Text and/or tool calls
+        Chat-->>User: Stream model text
+        Chat->>Tool: vscode.lm.invokeTool
+        opt MCP-backed tool
+            Tool->>MCP: vscode.lm.invokeTool with participant tool token
+            MCP-->>Tool: Native MCP result
+        end
+        Tool-->>Chat: LanguageModelToolResult
+        opt Result contains one recognizable section
+            Chat->>File: Merge and save HTML
+            Chat-->>User: File link and Open newsletter button
+        end
+        Chat->>Model: Tool results plus continuation guardrails
+    end
 ```
 
-## Key Design Patterns
+### Model selection and token control
 
-### 1. On-Demand Prompt Loading
-Skills prompts are only loaded when detected in user message, keeping context window efficient.
+The participant uses `ChatRequest.request.model`; it never creates an Azure/OpenAI client and has no independent model configuration. The user selects the model in Copilot Chat.
 
-### 2. Sequential Processing Guardrail
-GPT-5.2 tends to parallelize tasks. The system enforces sequential section processing to prevent data mixing.
+Before each model request, the participant counts tokens with the selected model. It preserves the system guardrails and current prompt, then trims older history/tool groups if necessary. Tool rounds are limited by `aviators.maxToolRounds` (default 12, allowed range 1-50). Individual tool invocations have a two-minute timeout.
 
-### 3. Anti-Fabrication Guardrail
-Multiple layers prevent the LLM from inventing content:
-- System prompt explicit rules
-- Tool result validation
-- Skill-level fake name detection
+### Command routing
 
-### 4. MCP Integration
-Uses Model Context Protocol for:
-- Email retrieval (EmailCompanion MCP)
-- Browser automation (Playwright MCP)
+- `/newsletter` injects all workflows and requires Ace Aviator → Product Group → Community order.
+- `/ace` injects only the Ace Aviator workflow.
+- `/product` injects date-window and Product Group workflows.
+- `/community` injects date-window and Community workflows.
+- `/preview` bypasses the model and opens an existing newsletter.
+- A request without a command uses keyword-based skill detection.
 
-### 5. SSE Streaming
-Real-time updates to UI as sections complete, providing immediate feedback.
+The base and workflow prompts require real user/tool data and prefer omission or an explicit failure over fabricated content.
 
-## File Structure
+## Seven language-model tools
 
+The tool list passed to the selected model is fixed:
+
+| Registered tool | Execution |
+|---|---|
+| `aviators_computeDateWindow` | Local deterministic date-window skill. |
+| `aviators_createAceAviator` | Local deterministic Ace Aviator HTML skill. |
+| `aviators_createProductGroupNews` | Local deterministic Product Group HTML skill. |
+| `aviators_createCommunityNews` | Local deterministic escaped Community batch skill. |
+| `aviators_scrapeLinkedIn` | Core registry tool backed by Playwright MCP navigation and snapshots. |
+| `aviators_resolveRedirects` | Core registry tool backed by Playwright MCP navigation. |
+| `aviators_getTechCommunityBlogPosts` | Core registry tool backed by Playwright MCP navigation and snapshots. |
+
+The first four tools call core `execute` functions directly. The final three create an `LmToolBridge`, rebuild the core registry with that bridge, and invoke native MCP tools through `vscode.lm.invokeTool`. LinkedIn scraping and redirect resolution can request user confirmation before network access.
+
+The core registry also defines lower-level EmailCompanion and Playwright operations used by workflow code, including `getEmailFromMCP`, `playwright_navigate`, `playwright_snapshot`, `playwright_click`, and `playwright_type`.
+
+## Native MCP server providers
+
+`AviatorsMcpServerDefinitionProvider` returns definitions only when `aviators.newsletter.enableMcpProvider` is enabled.
+
+### Playwright
+
+- Type: `McpStdioServerDefinition`.
+- Command/arguments: `aviators.playwright.mcpCommand`.
+- Default: Docker running `mcr.microsoft.com/playwright/mcp`.
+- Added runtime arguments: `--isolated`, `--headless` when configured, and `--storage-state` only after extension global-storage `storage.json` exists. The default Docker command bind-mounts global storage and uses a container-visible storage path.
+- Purpose: browser navigation, snapshots, LinkedIn activity retrieval, redirect resolution, and Tech Community retrieval.
+
+Because the extension registers this definition programmatically, a workspace `.vscode/mcp.json` containing the same Playwright server would duplicate it and is not part of the repository.
+
+### EmailCompanion
+
+- Type: `McpHttpServerDefinition`.
+- URI: `aviators.email.mcpEndpoint`; remote endpoints require HTTPS, while HTTP is accepted only for exact loopback hosts (`localhost`, `127.0.0.1`, or `::1`).
+- Authentication: `X-API-Key` populated from VS Code `SecretStorage`.
+- Purpose: retrieve the Ace Aviator email through the EmailCompanion MCP service.
+
+The endpoint remains a normal VS Code setting. The API key is never stored in repository configuration.
+
+## LinkedIn authentication state
+
+The **Aviators: Sign in to LinkedIn** command starts a separate headed MCP process:
+
+1. Create a persistent profile directory under extension global storage.
+2. Convert the default Docker configuration to local `npx @playwright/mcp@latest`, because a visible browser is required.
+3. Navigate to LinkedIn login.
+4. Wait for the user to complete credentials and any manual LinkedIn verification.
+5. Save `storage.json`.
+6. Validate that a non-expired `li_at` authentication cookie is present on an exact LinkedIn domain.
+7. Close the browser and MCP process.
+
+The status command validates the saved state and offers to start sign-in when it is absent, invalid, or expired. Authentication challenges cannot be automated reliably; manual verification is an expected requirement.
+
+## Workspace output flow
+
+Ace Aviator and Product Group skills return `{ success, html, ... }`. Community calls return a structured `{ success, kind: "communityNewsBatch", items, batchHtml, hasMore, ... }` containing only the new escaped batch. `NewsletterOutputSession` handles the full tool result before any model-context truncation:
+
+- `aceaviator`
+- `productnews`
+- `communitynews`
+
+```mermaid
+flowchart TD
+    Result[Full tool result] --> Kind{Community batch?}
+    Kind -- Yes --> Safe[Regenerate escaped item HTML]
+    Safe --> RunState{First batch in this run?}
+    RunState -- Yes --> ReplaceCommunity[Replace stale Community section]
+    RunState -- No --> Accumulate[Combine with trusted run items]
+    Kind -- No --> Extract[Extract HTML]
+    Extract --> Detect{Exactly one section?}
+    Detect -- No --> Continue[Return result to model only]
+    Detect -- Yes --> Target[Resolve workspace and month]
+    ReplaceCommunity --> Target
+    Accumulate --> Target
+    Target --> Read[Read existing HTML or template]
+    Read --> Merge[Replace only detected section]
+    Merge --> Write["<output folder>/<Month>-<Year>.html"]
+    Write --> Link[Chat anchor and open button]
 ```
-aviators-code-agent/
-├── src/
-│   ├── server.js           # Express API server
-│   ├── agent.js            # Agent core configuration
-│   ├── chat.js             # Chat utilities
-│   ├── index.js            # CLI entry point
-│   ├── prompts/
-│   │   └── skillPrompts.js # Dynamic skill prompts
-│   ├── skills/
-│   │   ├── dateWindow.js   # Date window calculation
-│   │   ├── aceAviator.js   # Ace Aviator section
-│   │   ├── productGroup.js # Product Group section
-│   │   └── communityNews.js # Community section
-│   └── tools/
-│       ├── index.js        # Tool exports
-│       ├── emailMcpClient.js # Email MCP client
-│       ├── mcpClient.js    # Playwright MCP client
-│       ├── emailTool.js    # Email utilities
-│       └── playwrightTool.js # LinkedIn scraper
-├── ui/
-│   ├── src/
-│   │   ├── App.jsx         # Main React component
-│   │   ├── App.css         # Application styles
-│   │   └── main.jsx        # React entry point
-│   └── public/
-│       └── logic-apps-logo.svg
-├── test/                   # Test files
-├── saved/                  # Persisted newsletters
-└── outputs/                # Scraped data cache
+
+Target selection prefers explicit request references, then the active editor's workspace, then a single workspace, then a workspace picker. The configured output path must remain relative to the workspace. Writes are serialized per file to prevent overlapping updates.
+
+Existing documents are split using section headings and merged with the built-in table-of-contents/template. `/preview` and the open command use `openTextDocument`/`showTextDocument` to open the HTML in an editor and never start a web server.
+
+Community accumulation is extension-state-backed rather than model-backed. Each participant request owns an opaque generation token: its first successful batch replaces the persisted Community section, and later batches combine with structured items retained for that same generation. A newer generation invalidates older continuations, duplicate URLs are removed, and the complete section is regenerated under one canonical heading. Prior newsletter HTML and the generation token are not part of the tool schema, so the model cannot expose or forge either state.
+
+## Source layout
+
+```text
+src/
+├── extension/
+│   ├── extension.ts          activation and registrations
+│   ├── participant.ts        Copilot Chat/model tool loop
+│   ├── toolRegistry.ts       seven language-model tools
+│   ├── lmToolBridge.ts       VS Code MCP tool invocation bridge
+│   ├── mcpProvider.ts        native MCP definitions
+│   ├── linkedinSession.ts    headed sign-in/session validation
+│   ├── output.ts             workspace HTML persistence
+│   └── config.ts             settings and SecretStorage
+└── core/
+    ├── agent.ts              skill/tool registry
+    ├── skillPrompts.ts       workflow prompts
+    ├── newsletter.ts         document utilities/template
+    ├── mcpBridge.ts          bridge contracts/session validation
+    ├── emailTools.ts         EmailCompanion tool
+    ├── playwrightTools.ts    Playwright-backed data tools
+    ├── dateWindow.ts         date-window skill
+    ├── aceAviator.ts         Ace Aviator skill
+    ├── productGroup.ts       Product Group skill
+    ├── communityNews.ts      Community skill
+    └── types.ts              shared definitions
+test/                         plain TypeScript test scripts
+esbuild.mjs                   extension bundler
+package.json                  VS Code manifest and scripts
 ```
 
-## Configuration
+## Build, test, and distribution
 
-### Azure OpenAI
-```javascript
-{
-  endpoint: process.env.AZURE_OPENAI_ENDPOINT,  // Your Azure OpenAI endpoint
-  apiVersion: '2025-01-01-preview',
-  model: 'gpt-5-2',  // Or your deployed model name
-  max_completion_tokens: 8192
-}
-```
+1. `npm run compile` runs `tsc --noEmit` and bundles the CommonJS extension entry with esbuild.
+2. `npm run lint` runs ESLint across the repository.
+3. `npm test` compiles core/test TypeScript into `out/` and runs `out/test/run.js`.
+4. `npm run package` invokes the VSIX prepublish compile and `vsce package --no-dependencies`.
+5. A tagged GitHub release workflow repeats lint/test/package and uploads `aviators-newsletter.vsix`.
 
-See `.env.example` for required environment variables.
-
-### MCP Servers
-- **Playwright MCP**: Browser automation for web scraping
-- **EmailCompanion MCP**: Microsoft Graph API for email retrieval
-
-## Error Handling
-
-1. **Tool Failures**: Reported to user with option to provide data manually
-2. **Rate Limiting**: Delays between LinkedIn requests (4000ms)
-3. **Session Timeout**: In-memory sessions persist until server restart
-4. **Content Validation**: Skills reject fabricated content (fake names)
+Release VSIX files are the documented distribution mechanism.

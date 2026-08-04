@@ -28,6 +28,9 @@ temp-*.json
 # Build output
 dist/
 build/
+out/
+.playwright-mcp/
+release/
 
 # Saved newsletter state (contains generated content)
 saved/

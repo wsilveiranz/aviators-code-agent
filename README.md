@@ -1,143 +1,172 @@
-# Logic Apps Aviators Newsletter Agent
+# Aviators Newsletter
 
-An AI-powered agent that automates creation of the Logic Apps Aviators Newsletter. It uses Azure OpenAI with function calling to orchestrate data gathering from email, Tech Community blogs, and LinkedIn — then generates formatted HTML sections ready for publishing.
+A Visual Studio Code extension that adds the `@aviators` GitHub Copilot Chat participant for creating Logic Apps Aviators newsletter HTML. It uses the model selected in Copilot Chat, nine extension language-model tools, and native VS Code MCP server providers.
 
-[![Demo Video](https://img.youtube.com/vi/td4nzKNibC4/0.jpg)](https://www.youtube.com/watch?v=td4nzKNibC4)
+The extension is distributed as a VSIX attached to GitHub releases. It is not documented as being available from a marketplace.
 
-## Prerequisites
+## Requirements
 
-- [Node.js](https://nodejs.org/) 20+
-- [Docker](https://www.docker.com/) (for the Playwright MCP server)
-- An Azure OpenAI deployment with API access
+- Visual Studio Code 1.102 or later.
+- GitHub Copilot Chat access and an available model that supports tool calling.
+- An open workspace folder; generated newsletters are written into the workspace.
+- Docker for the default Playwright MCP command.
+- Node.js 20 and npm for extension development and for the default headed LinkedIn sign-in fallback.
+- For Ace Aviator email retrieval, an EmailCompanion HTTPS MCP endpoint and API key. Plaintext HTTP is supported only on loopback hosts for development.
 
-## Getting Started
+## Install the release VSIX
 
-1. **Clone and install dependencies:**
+1. Download `aviators-newsletter.vsix` from the repository's [GitHub Releases](https://github.com/wsilveiranz/aviators-code-agent/releases).
+2. In VS Code, run **Extensions: Install from VSIX...** from the Command Palette and select the downloaded file.
+3. Reload VS Code if prompted.
 
-   ```bash
-   git clone <repo-url>
-   cd aviators-code-agent
-   npm install
-   cd ui && npm install && cd ..
-   ```
+You can also install it from a terminal:
 
-2. **Configure environment variables:**
+```powershell
+code --install-extension .\aviators-newsletter.vsix
+```
 
-   ```bash
-   cp .env.example .env
-   ```
+## Configure the extension
 
-   Edit `.env` and fill in your Azure OpenAI credentials:
+Open VS Code Settings and search for **Aviators Newsletter**, or add settings to workspace/user `settings.json`.
 
-   | Variable | Description |
-   |----------|-------------|
-   | `AZURE_OPENAI_ENDPOINT` | Your Azure OpenAI endpoint URL |
-   | `AZURE_OPENAI_API_KEY` | Your API key |
-   | `AZURE_OPENAI_API_VERSION` | API version (default: `2025-01-01-preview`) |
-   | `AZURE_OPENAI_MODEL` | Deployed model name (default: `gpt-5-2`) |
+| Setting | Default | Purpose |
+|---|---|---|
+| `aviators.output.folder` | `newsletters` | Workspace-relative directory for generated HTML. Absolute paths and `..` are rejected. |
+| `aviators.playwright.headless` | `true` | Adds `--headless` to the runtime Playwright MCP server. |
+| `aviators.playwright.mcpCommand` | Docker command shown below | Executable and arguments used for the Playwright stdio MCP server. |
+| `aviators.email.mcpEndpoint` | empty | EmailCompanion HTTPS MCP endpoint. HTTP is allowed only on `localhost`, `127.0.0.1`, or `::1`. |
+| `aviators.maxToolRounds` | `12` | Maximum model tool-call rounds per request (1-50). |
+| `aviators.newsletter.enableMcpProvider` | `true` | Enables the extension's native Playwright and EmailCompanion MCP definitions. |
 
-3. **Start the application:**
+Default Playwright MCP command:
 
-   ```bash
-   npm start
-   ```
-
-   This launches the Express API server and the React UI together. Open the URL shown by Vite (typically `http://localhost:5173`).
-
-## Usage
-
-| Command | Description |
-|---------|-------------|
-| `npm start` | Start Express server + Vite UI together |
-| `npm run server` | Express API server only |
-| `npm run ui` | Vite dev server only |
-| `npm run chat` | CLI chat mode |
-| `npm run demo` | Run demo |
-| `npm test` | Run all tests |
-
-### Creating a Newsletter
-
-In the UI chat, ask the agent to create a newsletter for a given month:
-
-> Create the newsletter for February 2026
-
-The agent processes sections sequentially:
-
-1. **Ace Aviator of the Month** — retrieves a Q&A interview from email via MCP, generates an HTML section
-2. **News from Product Group** — crawls Tech Community blog posts, filters by date window, summarizes each post
-3. **News from Community** — scrapes LinkedIn activity URLs, fetches linked articles, generates summaries
-
-Each section streams to the UI preview in real time via SSE.
-
-### Programmatic Usage
-
-```javascript
-import { executeSkill } from './src/index.js';
-
-const dateWindow = await executeSkill('computeDateWindow', { month: 'February 2026' });
-
-const aceSection = await executeSkill('createAceAviator', {
-  month: 'February 2026',
-  name: 'John Doe',
-  linkedin: 'https://linkedin.com/in/johndoe',
-  qaPairs: [
-    { question: "What's your role and title?", answer: "I'm a developer..." }
+```json
+{
+  "command": "docker",
+  "args": [
+    "run",
+    "-i",
+    "--rm",
+    "--init",
+    "mcr.microsoft.com/playwright/mcp"
   ]
-});
+}
 ```
 
-## Architecture
+The extension registers these servers programmatically, so a workspace `.vscode/mcp.json` is not required:
 
-The Express backend (`src/server.js`) runs an OpenAI function-calling loop, invoking **skills** (section generators) and **tools** (data fetchers) until the LLM produces the final newsletter HTML.
+- **Playwright** — stdio server using `aviators.playwright.mcpCommand`. The default Docker command mounts extension global storage and uses a container-visible saved state path. The extension omits `--storage-state` until the file exists, then also adds `--isolated` and optionally `--headless`.
+- **EmailCompanion** — HTTP server using `aviators.email.mcpEndpoint`. During resolution, the extension adds the stored API key as `X-API-Key`, so remote endpoints must use HTTPS.
 
+### Store or remove the EmailCompanion API key
+
+Run **Aviators: Set Email API Key** from the Command Palette. The value is stored in VS Code `SecretStorage`, not in workspace files. Submit an empty value to delete the stored key.
+
+## Sign in to LinkedIn
+
+1. Run **Aviators: Sign in to LinkedIn**.
+2. Complete sign-in in the headed browser.
+3. Complete any LinkedIn verification or challenge manually.
+4. Return to VS Code and select **Save Session**.
+
+The saved browser state is kept under the extension's global storage and reused by the runtime Playwright MCP definition. When the configured command is Docker, the sign-in command uses a local `npx @playwright/mcp@latest` process because the login flow needs a visible browser.
+
+Run **Aviators: Check LinkedIn Session Status** to validate that a non-expired LinkedIn `li_at` authentication cookie exists on an exact LinkedIn domain. LinkedIn may require sign-in or manual verification again at any time.
+
+## Use `@aviators`
+
+Open Copilot Chat, choose a model in the Copilot model picker, and address the participant:
+
+```text
+@aviators /newsletter Create the newsletter for August 2026.
 ```
-src/
-├── server.js              # Express API with SSE streaming
-├── agent.js               # Skill/tool registry and dispatch
-├── chat.js                # CLI chat interface
-├── prompts/
-│   └── skillPrompts.js    # On-demand prompt loading per skill
-├── skills/                # High-level section generators
-│   ├── dateWindow.js      # PST date range calculation
-│   ├── aceAviator.js      # Ace Aviator Q&A section
-│   ├── productGroup.js    # Product Group news table
-│   └── communityNews.js   # Community news section
-└── tools/                 # Low-level data fetchers (MCP + direct)
-    ├── emailMcpClient.js  # Email via EmailCompanion MCP
-    ├── mcpClient.js       # Playwright MCP + Tech Community blog
-    └── playwrightTool.js  # LinkedIn scraping via Playwright
-ui/                        # React 19 + Vite frontend
+
+The participant uses `request.model`, so each request runs with the model selected in Copilot Chat. There is no separate model or model-provider setting in this extension.
+
+### Slash commands
+
+| Command | Purpose |
+|---|---|
+| `@aviators /newsletter` | Create or open the persistent newsletter template without calling a model. |
+| `@aviators /ace` | Generate only the Ace Aviator section. |
+| `@aviators /product` | Compute the newsletter window and generate only Product Group News. |
+| `@aviators /community` | Compute the newsletter window and generate only Community News, including all supplied URL batches. |
+| `@aviators /preview` | Open the current newsletter HTML without calling a model. |
+
+Without a slash command, the participant acts as a newsletter-aware specialist and detects the relevant action from the prompt. Requests to create or initialize a template are handled deterministically without calling a model. The resulting file becomes the current chat newsletter, and `/ace`, `/product`, and `/community` update that same artifact independently. Only an explicit request for the full or entire newsletter loads every section workflow.
+
+The participant reconstructs prior user and assistant text from the current chat, injects the contents of explicitly referenced text files, and has private read-only tools to list, read, and search files in the open workspace. Workspace tools cannot access paths outside the workspace and do not modify files.
+
+### Language-model tools
+
+The extension contributes and registers nine tools:
+
+| Tool reference | Registered name | Role |
+|---|---|---|
+| `computeDateWindow` | `aviators_computeDateWindow` | Calculate the PST/PDT newsletter date window. |
+| `createAceAviator` | `aviators_createAceAviator` | Generate Ace Aviator section HTML from supplied email/Q&A data. |
+| `createProductGroupNews` | `aviators_createProductGroupNews` | Generate Product Group section HTML from real posts. |
+| `createCommunityNews` | `aviators_createCommunityNews` | Generate one escaped Community batch for trusted participant-side accumulation. |
+| `getEmailFromMCP` | `getEmailFromMCP` | Retrieve the Ace Aviator source email through EmailCompanion MCP. |
+| `scrapeLinkedIn` | `aviators_scrapeLinkedIn` | Visit LinkedIn activity URLs in batches through Playwright MCP. |
+| `resolveRedirects` | `aviators_resolveRedirects` | Resolve supplied URLs through Playwright MCP. |
+| `playwright_navigate` | `playwright_navigate` | Visit linked external pages and return their content through Playwright MCP. |
+| `getTechCommunityBlogPosts` | `aviators_getTechCommunityBlogPosts` | Fetch and date-filter Integration on Azure blog posts through Playwright MCP. |
+
+Network tools can display VS Code confirmation prompts before visiting supplied URLs.
+
+## Workspace HTML output
+
+When a section tool returns recognizable newsletter HTML, or `createCommunityNews` returns a structured batch, the extension:
+
+1. Selects the workspace from request references, the active editor, or a workspace picker.
+2. Writes to `<workspace>/<aviators.output.folder>/<Month>-<Year>.html`.
+3. Preserves other recognizable sections. A request's first Community batch replaces stale Community output; later batches are rebuilt from trusted extension-owned items without accepting prior HTML from the model.
+4. Stages the complete file update without changing the workspace file, opens a diff, and provides **Review changes**, **Apply changes**, and **Discard changes** actions.
+
+For example, August 2026 is proposed for `newsletters/August-2026.html`. If the request has no recognizable month, the current UTC month and year are used when output is first required. The extension applies the proposal through a VS Code workspace edit only after **Apply changes**, making it undoable and refusing to apply it if the file changed after the diff was created.
+
+The preview command opens the HTML document in a VS Code editor. It does not run a separate web application or server.
+
+## Command Palette commands
+
+- **Aviators: Open Current Newsletter Preview**
+- **Aviators: Set Email API Key**
+- **Aviators: Sign in to LinkedIn**
+- **Aviators: Check LinkedIn Session Status**
+
+## Develop and package
+
+```powershell
+npm install
+npm run compile
+npm run lint
+npm test
+npm run package
+.\scripts\build-vsix.ps1 -Version 0.1.1
 ```
 
-For a detailed architecture walkthrough with diagrams, see [`ARCHITECTURE.md`](ARCHITECTURE.md).
+| Command | Purpose |
+|---|---|
+| `npm run compile` | Type-check with TypeScript and bundle `src/extension/extension.ts` to `dist/extension.cjs` with esbuild. |
+| `npm run watch` | Rebuild the esbuild bundle when extension source changes. |
+| `npm run lint` | Lint the TypeScript and JavaScript sources with ESLint. |
+| `npm test` | Compile core/tests to `out/` and run the plain Node.js test runner. |
+| `npm run test:compile` | Compile only the core and test sources for Node.js tests. |
+| `npm run package` | Create a VSIX with `vsce package --no-dependencies`; this runs the prepublish compile step. |
+| `.\scripts\build-vsix.ps1 -Version 0.1.1` | Validate and build `release/aviators-newsletter-0.1.1.vsix` with a temporary version override; restores `package.json` and `package-lock.json` afterward. |
 
-## Deployment
+To run one compiled test:
 
-The agent deploys to Azure using a two-component architecture:
+```powershell
+npm run test:compile
+node .\out\test\aceAviator.test.js
+```
 
-| Component | Hosting | Purpose |
-|-----------|---------|---------|
-| Express server | Azure Container Apps | Agent orchestration, skills/tools, SSE streaming (port 3001), Foundry Responses API (port 8088) |
-| React UI | Azure Static Web Apps | Chat interface, HTML preview pane |
+Tagged releases use the `v*` tag as the temporary extension version, run lint and tests, and attach `aviators-newsletter-<version>.vsix` to the GitHub release. For example, pushing `v0.1.2` packages version `0.1.2` without requiring the committed `package.json` version to be changed first.
 
-Authentication switches from API key (local dev) to **Managed Identity** when deployed. The Container App's system-assigned MI is granted the Cognitive Services OpenAI User role.
-
-### Quick Deploy
-
-1. **Provision infrastructure** (one-time):
-   ```bash
-   az deployment group create \
-     --resource-group rg-aviators \
-     --template-file infra/main.bicep \
-     --parameters infra/main.bicepparam
-   ```
-
-2. **Build and deploy** — push to `main` to trigger the GitHub Actions workflow, or trigger manually on any branch via `workflow_dispatch`.
-
-3. **Register in Foundry** — in the Azure AI Foundry portal, navigate to **Operate → Register agent** and provide the Container App URL (port 8088).
-
-See [`docs/tech-spec-foundry-deployment.md`](docs/tech-spec-foundry-deployment.md) and [`infra/README.md`](infra/README.md) for full deployment instructions.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for component and data-flow details.
 
 ## License
 
-Private — Logic Apps Aviators Team
+MIT

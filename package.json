@@ -1,37 +1,511 @@
 {
-  "name": "aviators-code-agent",
-  "version": "1.0.0",
-  "description": "Logic Apps Aviators Newsletter Editor Agent using Copilot SDK",
-  "type": "module",
-  "main": "src/index.js",
-  "scripts": {
-    "start": "concurrently -n server,ui -c blue,green \"npm run server\" \"npm run ui\"",
-    "server": "node src/server.js",
-    "ui": "cd ui && npm run dev",
-    "chat": "node src/chat.js",
-    "dev": "node --watch src/chat.js",
-    "info": "node src/index.js",
-    "demo": "node src/index.js --demo",
-    "test": "node test/run.js",
-    "test:skills": "node src/test-productGroup.js"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.50.0",
-    "@azure-rest/ai-inference": "^1.0.0-beta.6",
-    "@azure/core-auth": "^1.10.1",
-    "@azure/identity": "^4.13.0",
-    "@azure/monitor-opentelemetry": "^1.15.1",
-    "@modelcontextprotocol/sdk": "^1.25.3",
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/resources": "^2.5.0",
-    "concurrently": "^9.1.2",
-    "cors": "^2.8.6",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
-    "openai": "^6.17.0",
-    "playwright": "^1.42.0"
+  "name": "aviators-newsletter",
+  "displayName": "Aviators Newsletter",
+  "description": "Build Logic Apps Aviators newsletters with GitHub Copilot.",
+  "version": "0.1.0",
+  "publisher": "aviators",
+  "icon": "images/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wsilveiranz/aviators-code-agent.git"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onChatParticipant:aviators.newsletter",
+    "onLanguageModelTool:aviators_computeDateWindow",
+    "onLanguageModelTool:aviators_createAceAviator",
+    "onLanguageModelTool:aviators_createProductGroupNews",
+    "onLanguageModelTool:aviators_createCommunityNews",
+    "onLanguageModelTool:getEmailFromMCP",
+    "onLanguageModelTool:aviators_scrapeLinkedIn",
+    "onLanguageModelTool:aviators_resolveRedirects",
+    "onLanguageModelTool:playwright_navigate",
+    "onLanguageModelTool:aviators_getTechCommunityBlogPosts",
+    "onCommand:aviators.openPreview",
+    "onCommand:aviators.setEmailApiKey",
+    "onCommand:aviators.signInToLinkedIn",
+    "onCommand:aviators.checkLinkedInSessionStatus",
+    "onMcpServerDefinitionProvider:aviators.newsletter"
+  ],
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "aviators.newsletter",
+        "name": "aviators",
+        "fullName": "Aviators Newsletter",
+        "description": "Create and refine an Aviators newsletter.",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "newsletter",
+            "description": "Create or open the newsletter template; section commands update it independently."
+          },
+          {
+            "name": "ace",
+            "description": "Generate only the Ace Aviator interview section."
+          },
+          {
+            "name": "product",
+            "description": "Generate only Product Group News using the newsletter date window."
+          },
+          {
+            "name": "community",
+            "description": "Generate only Community News using the newsletter date window and source batches."
+          },
+          {
+            "name": "preview",
+            "description": "Open the current newsletter preview without calling a language model."
+          }
+        ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "aviators_computeDateWindow",
+        "displayName": "Compute Newsletter Date Window",
+        "modelDescription": "Compute PST newsletter window for a given Month. Returns startPST (first Tuesday of previous month at 00:00) and endPST (first Sunday of current month at 23:59).",
+        "userDescription": "Compute the PST/PDT date range used to gather content for a newsletter month.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "computeDateWindow",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "month": {
+              "type": "string",
+              "description": "Month and year, e.g., \"February 2026\""
+            }
+          },
+          "required": [
+            "month"
+          ]
+        }
+      },
+      {
+        "name": "aviators_createAceAviator",
+        "displayName": "Create Ace Aviator Section",
+        "modelDescription": "Generate Ace Aviator HTML section. You can pass either emailBody (skill will try to parse) OR qaPairs (pre-parsed Q&A array - PREFERRED).",
+        "userDescription": "Generate the Ace Aviator newsletter HTML from supplied Q&A content.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "createAceAviator",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "month": {
+              "type": "string",
+              "description": "Month for the newsletter, e.g., \"February 2026\""
+            },
+            "emailBody": {
+              "type": "string",
+              "description": "The email body containing Q&A responses (optional if qaPairs provided)"
+            },
+            "qaPairs": {
+              "type": "array",
+              "description": "Pre-parsed Q&A pairs - PREFERRED over emailBody parsing. Each item has question and answer.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "question": {
+                    "type": "string"
+                  },
+                  "answer": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "name": {
+              "type": "string",
+              "description": "Full name of the Ace Aviator"
+            },
+            "linkedin": {
+              "type": "string",
+              "description": "LinkedIn profile URL"
+            },
+            "imageUrl": {
+              "type": "string",
+              "description": "URL of the profile image (optional)"
+            }
+          },
+          "required": [
+            "month",
+            "name"
+          ]
+        }
+      },
+      {
+        "name": "aviators_createProductGroupNews",
+        "displayName": "Create Product Group News",
+        "modelDescription": "Generate Product Group news section from Tech Community posts. Uses the newsletter date window by default, but can include supplied out-of-window posts when the user explicitly requests an override. Posts should have: title, link, publishedAt, and summary.",
+        "userDescription": "Generate Product Group newsletter HTML from supplied Tech Community posts.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "createProductGroupNews",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "month": {
+              "type": "string",
+              "description": "Month for the newsletter, e.g., \"February 2026\""
+            },
+            "posts": {
+              "type": "array",
+              "description": "Array of post objects with title, link, publishedAt (date string), summary, and optional imageUrl",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "description": "Post title"
+                  },
+                  "link": {
+                    "type": "string",
+                    "description": "URL to the post"
+                  },
+                  "publishedAt": {
+                    "type": "string",
+                    "description": "Publication date (e.g., \"2026-01-28\" or \"Jan 28, 2026\")"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "description": "Post excerpt/summary"
+                  },
+                  "imageUrl": {
+                    "type": "string",
+                    "description": "Optional image URL"
+                  }
+                },
+                "required": [
+                  "title",
+                  "link",
+                  "publishedAt"
+                ]
+              }
+            },
+            "includeOutsideDateWindow": {
+              "type": "boolean",
+              "description": "Default false. Set true only when the user explicitly instructs you to include the supplied posts despite the standard newsletter date window."
+            },
+            "dateWindowOverrideReason": {
+              "type": "string",
+              "description": "Required when includeOutsideDateWindow is true. Briefly state the user instruction authorizing the override."
+            }
+          },
+          "required": [
+            "month",
+            "posts"
+          ]
+        }
+      },
+      {
+        "name": "aviators_createCommunityNews",
+        "displayName": "Create Community News",
+        "modelDescription": "Build one escaped Community News batch from processed LinkedIn activity data. REQUIRES actual scraped data from scrapeLinkedIn - do NOT pass fabricated data or prior newsletter HTML. In an Aviators participant generation, the extension replaces stale Community output with the first batch and accumulates later batches, including trusted cross-request resumes.",
+        "userDescription": "Generate one safe Community News batch from real scraped activity data.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "createCommunityNews",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "type": "array",
+              "description": "Array of community items with externalLink, title, authorProfile, authorName, and summary. Data MUST come from scrapeLinkedIn results.",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "externalLink": {
+                    "type": "string",
+                    "description": "URL to the article"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "Article title"
+                  },
+                  "authorProfile": {
+                    "type": "string",
+                    "description": "LinkedIn profile URL of the author"
+                  },
+                  "authorName": {
+                    "type": "string",
+                    "description": "Name of the author"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "description": "80-100 word summary of the article"
+                  },
+                  "itemKind": {
+                    "type": "string",
+                    "description": "Type of content: Post or Video"
+                  }
+                }
+              }
+            },
+            "hasMore": {
+              "type": "boolean",
+              "description": "Set to true if there are more URL batches to process after this one. When false or omitted, this is the final batch.",
+              "default": false
+            }
+          },
+          "required": [
+            "items"
+          ]
+        }
+      },
+      {
+        "name": "getEmailFromMCP",
+        "displayName": "Retrieve Newsletter Email",
+        "modelDescription": "Retrieve email content from the configured EmailCompanion MCP server by subject and optional sender. Use this for the Ace Aviator Q&A workflow.",
+        "userDescription": "Search the configured EmailCompanion server for newsletter source email.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "getEmailFromMCP",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "description": "Email subject to search for (partial match supported)"
+            },
+            "from": {
+              "type": "string",
+              "description": "Optional sender email or name to filter by"
+            }
+          },
+          "required": [
+            "subject"
+          ]
+        }
+      },
+      {
+        "name": "aviators_scrapeLinkedIn",
+        "displayName": "Scrape LinkedIn Activity",
+        "modelDescription": "Scrape LinkedIn activity URLs in batches. Processes up to batchSize (default 3) URLs per call. When hasMore is true in the response, call again with the remainingUrls, then pass each processed batch to createCommunityNews. The participant replaces stale Community output on a generation's first batch and accumulates continuation batches across trusted resumes.",
+        "userDescription": "Visit LinkedIn activity URLs in batches and return page content for Community News.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "scrapeLinkedIn",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "urls": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Array of LinkedIn activity URLs to scrape"
+            },
+            "inputJson": {
+              "type": "string",
+              "description": "(Legacy) JSON string array of URLs, e.g. '[\"url1\",\"url2\"]'. Use \"urls\" array instead when possible."
+            },
+            "batchSize": {
+              "type": "number",
+              "description": "Max URLs to process per call (default 3). Remaining URLs are returned for the next call.",
+              "default": 3
+            },
+            "delayMs": {
+              "type": "number",
+              "description": "Delay between requests in milliseconds",
+              "default": 4000
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "aviators_resolveRedirects",
+        "displayName": "Resolve Redirect URLs",
+        "modelDescription": "Post-process scraped links to resolve redirects and extract final URLs. Uses the Playwright MCP browser to follow redirects.",
+        "userDescription": "Visit supplied URLs and report their final destinations after redirects.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "resolveRedirects",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "urls": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Array of URLs to resolve redirects for"
+            },
+            "inputJson": {
+              "type": "string",
+              "description": "(Legacy) JSON string array of URLs or scraped items with externalLink fields"
+            },
+            "delayMs": {
+              "type": "number",
+              "description": "Delay between requests in milliseconds",
+              "default": 1500
+            }
+          },
+          "required": []
+        }
+      },
+      {
+        "name": "playwright_navigate",
+        "displayName": "Navigate External Page",
+        "modelDescription": "Navigate to an external URL using the configured Playwright MCP server and return a page snapshot. Use this to retrieve real linked-page content required by Product Group and Community workflows.",
+        "userDescription": "Visit an external page with Playwright and return its content.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "playwright_navigate",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The absolute URL to navigate to"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "name": "aviators_getTechCommunityBlogPosts",
+        "displayName": "Get Tech Community Blog Posts",
+        "modelDescription": "Fetches blog posts from the Tech Community Integration on Azure blog and filters by date range. Returns ONLY posts published within the specified date window. Use this instead of playwright_navigate when you need blog posts for a specific newsletter month. The tool automatically excludes \"Aviators Newsletter\" posts and handles date filtering.",
+        "userDescription": "Fetch public Integration on Azure blog posts within a newsletter date range.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "getTechCommunityBlogPosts",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "month": {
+              "type": "string",
+              "description": "The newsletter month (e.g., \"February 2026\")"
+            },
+            "startDate": {
+              "type": "string",
+              "description": "Start date of the window in ISO format (e.g., \"2026-01-06\")"
+            },
+            "endDate": {
+              "type": "string",
+              "description": "End date of the window in ISO format (e.g., \"2026-02-01\")"
+            }
+          },
+          "required": [
+            "month",
+            "startDate",
+            "endDate"
+          ]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "aviators.openPreview",
+        "title": "Aviators: Open Current Newsletter Preview"
+      },
+      {
+        "command": "aviators.setEmailApiKey",
+        "title": "Aviators: Set Email API Key"
+      },
+      {
+        "command": "aviators.signInToLinkedIn",
+        "title": "Aviators: Sign in to LinkedIn"
+      },
+      {
+        "command": "aviators.checkLinkedInSessionStatus",
+        "title": "Aviators: Check LinkedIn Session Status"
+      }
+    ],
+    "configuration": {
+      "title": "Aviators Newsletter",
+      "properties": {
+        "aviators.output.folder": {
+          "type": "string",
+          "default": "newsletters",
+          "scope": "resource",
+          "description": "Workspace-relative folder where generated newsletters are saved."
+        },
+        "aviators.playwright.headless": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run Playwright browser automation without a visible browser window."
+        },
+        "aviators.playwright.mcpCommand": {
+          "type": "object",
+          "default": {
+            "command": "docker",
+            "args": [
+              "run",
+              "-i",
+              "--rm",
+              "--init",
+              "mcr.microsoft.com/playwright/mcp"
+            ]
+          },
+          "additionalProperties": false,
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "Executable used to start the Playwright MCP server."
+            },
+            "args": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Arguments passed to the Playwright MCP server executable."
+            }
+          },
+          "required": [
+            "command",
+            "args"
+          ],
+          "description": "Portable executable and argument list used to start the Playwright MCP server."
+        },
+        "aviators.email.mcpEndpoint": {
+          "type": "string",
+          "default": "",
+          "description": "HTTPS endpoint for the EmailCompanion MCP server. Plaintext HTTP is allowed only on localhost, 127.0.0.1, or ::1 for development."
+        },
+        "aviators.maxToolRounds": {
+          "type": "integer",
+          "default": 12,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum number of model tool-call rounds allowed for one request."
+        },
+        "aviators.newsletter.enableMcpProvider": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable discovery of newsletter MCP servers."
+        }
+      }
+    },
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "aviators.newsletter",
+        "label": "Aviators Newsletter"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc --noEmit && node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package --no-dependencies",
+    "package:version": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-vsix.ps1 -Version",
+    "test": "npm run test:compile && node out/test/run.js",
+    "test:compile": "tsc -p tsconfig.test.json",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.102.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/vsce": "^3.6.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.8.0"
   }
 }
