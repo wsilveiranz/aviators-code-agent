@@ -1,10 +1,10 @@
-import type { Skill } from './types.js';
+import type { Skill } from '../core/types.js';
 
 import {
   formatPacificCalendarDate,
   normalizePacificCalendarDate,
-} from './calendarDate.js';
-import { escapeHtml, toSafeHttpUrl } from './contentSafety.js';
+} from '../core/calendarDate.js';
+import { escapeHtml, toSafeHttpUrl } from '../core/contentSafety.js';
 import { computeDateWindow } from './dateWindow.js';
 
 export const SOURCE_URL =

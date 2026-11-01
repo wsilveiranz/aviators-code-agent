@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import { deleteEmailApiKey, setEmailApiKey } from "./config";
+import {
+  deleteEmailApiKey,
+  getEnableMcpProvider,
+  getPlaywrightMcpCommand,
+  setEmailApiKey
+} from "./config";
 import {
   AviatorsMcpServerDefinitionProvider,
   MCP_SERVER_DEFINITION_PROVIDER_ID
@@ -19,6 +24,10 @@ import {
   createNewsletterChatRequestHandler
 } from "./participant.js";
 import { registerNewsletterLanguageModelTools } from "./toolRegistry";
+import { resolveLmToolName } from "./lmToolBridge";
+
+const CHECK_PLAYWRIGHT_MCP_STATUS_COMMAND =
+  "aviators.checkPlaywrightMcpStatus";
 
 export function activate(context: vscode.ExtensionContext): void {
   const mcpProvider = new AviatorsMcpServerDefinitionProvider(context);
@@ -133,6 +142,32 @@ export function activate(context: vscode.ExtensionContext): void {
     "aviators.checkLinkedInSessionStatus",
     () => linkedInSessionCommands.checkStatus()
   );
+  const checkPlaywrightMcpStatusCommand = vscode.commands.registerCommand(
+    CHECK_PLAYWRIGHT_MCP_STATUS_COMMAND,
+    async () => {
+      const configured = getPlaywrightMcpCommand();
+      if (!getEnableMcpProvider()) {
+        await vscode.window.showWarningMessage(
+          "The Aviators MCP provider is disabled. Enable aviators.newsletter.enableMcpProvider or configure a separate trusted Playwright MCP server."
+        );
+        return;
+      }
+
+      try {
+        const resolvedName = resolveLmToolName(
+          "browser_navigate",
+          vscode.lm.tools.map((tool) => tool.name)
+        );
+        await vscode.window.showInformationMessage(
+          `Playwright MCP is available as "${resolvedName}". Configured Aviators command: ${formatCommand(configured.command, configured.args)}`
+        );
+      } catch {
+        await vscode.window.showErrorMessage(
+          `Playwright MCP tools have not been discovered. Configured Aviators command: ${formatCommand(configured.command, configured.args)}. Run "MCP: List Servers", start and trust Playwright, then use "Show Output".`
+        );
+      }
+    }
+  );
 
   context.subscriptions.push(
     participant,
@@ -144,6 +179,7 @@ export function activate(context: vscode.ExtensionContext): void {
     setEmailApiKeyCommand,
     signInToLinkedInCommand,
     checkLinkedInSessionStatusCommand,
+    checkPlaywrightMcpStatusCommand,
     ...languageModelTools,
     linkedInSessionCommands,
     mcpProvider,
@@ -155,3 +191,11 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {}
+
+function formatCommand(command: string, args: readonly string[]): string {
+  return [command, ...args].map(quoteCommandPart).join(" ");
+}
+
+function quoteCommandPart(value: string): string {
+  return /\s/.test(value) ? JSON.stringify(value) : value;
+}

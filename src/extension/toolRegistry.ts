@@ -83,7 +83,7 @@ const techCommunityBlogDefinition = getRegistryToolDefinition(
   "getTechCommunityBlogPosts"
 );
 
-export const newsletterLanguageModelChatTools: readonly vscode.LanguageModelChatTool[] =
+const newsletterLanguageModelChatTools: readonly vscode.LanguageModelChatTool[] =
   [
     toChatTool(LANGUAGE_MODEL_TOOL_NAMES.computeDateWindow, dateWindowSkill),
     toChatTool(LANGUAGE_MODEL_TOOL_NAMES.createAceAviator, aceAviatorSkill),
@@ -117,6 +117,27 @@ export const newsletterLanguageModelChatTools: readonly vscode.LanguageModelChat
     ),
     ...workspaceLanguageModelChatTools
   ];
+
+export function getAvailableLanguageModelChatTools():
+  readonly vscode.LanguageModelChatTool[] {
+  const tools = new Map<string, vscode.LanguageModelChatTool>();
+
+  for (const tool of vscode.lm.tools) {
+    tools.set(tool.name, {
+      name: tool.name,
+      description: tool.description,
+      inputSchema: tool.inputSchema
+    });
+  }
+
+  for (const tool of newsletterLanguageModelChatTools) {
+    if (!tools.has(tool.name)) {
+      tools.set(tool.name, tool);
+    }
+  }
+
+  return [...tools.values()];
+}
 
 export function registerNewsletterLanguageModelTools(): vscode.Disposable[] {
   return [

@@ -4,7 +4,7 @@ import {
   filterValidItems,
   generateHTML,
   type CommunityBatchItem
-} from "../core/communityNews.js";
+} from "../skills/communityNews.js";
 
 const COMMUNITY_RESUME_VERSION = 1;
 const MAX_RESUME_URLS = 500;

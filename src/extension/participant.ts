@@ -22,7 +22,7 @@ import {
   emitNewsletterLink
 } from "./output.js";
 import type { NewsletterOutputSession } from "./output.js";
-import { newsletterLanguageModelChatTools } from "./toolRegistry.js";
+import { getAvailableLanguageModelChatTools } from "./toolRegistry.js";
 import {
   serializeToolResultContent,
   truncateSerializedToolResult
@@ -64,7 +64,9 @@ ${agentConfig.description}
 
 ## Workflow rules
 - Use the current chat history and explicitly referenced file content as working context.
-- Use the read-only workspace tools when the request depends on files that were not explicitly referenced. Inspect before assuming.
+- Use the available VS Code, GitHub Copilot, extension, and MCP tools when the request requires workspace inspection, file editing, search, terminal commands, or other development actions. Inspect before assuming.
+- For a small exact correction in an existing workspace file, prefer aviators_replaceWorkspaceText after reading the current content. Include enough old text to identify one match.
+- Use the dedicated Aviators section tools for newsletter generation so output remains validated and reviewable.
 - Compute the configured newsletter date window before gathering date-bound Product Group or Community content.
 - Treat workflow parameters as defaults unless the user explicitly overrides them. Follow explicit user inclusion/exclusion instructions, including date-window exceptions, unless they conflict with safety, anti-fabrication, or data-integrity rules.
 - Follow each injected skill workflow exactly, including required tool calls and batching.
@@ -363,14 +365,22 @@ export function createNewsletterChatRequestHandler(
         ? []
         : buildHistoryGroups(context.history);
       const toolGroups: ToolMessageGroup[] = [];
+      const availableTools = getAvailableLanguageModelChatTools();
+      const availableToolNames = new Set(
+        availableTools.map((tool) => tool.name)
+      );
+      const requestedToolNames = request.toolReferences.map(
+        (reference) => reference.name
+      );
       const toolOptions: vscode.LanguageModelChatRequestOptions = {
         justification:
           "Generate the requested Aviators newsletter content using the model selected in chat.",
-        tools: [...newsletterLanguageModelChatTools],
+        tools: [...availableTools],
         toolMode: vscode.LanguageModelChatToolMode.Auto
       };
       const inputTokenBudget = await calculateInputTokenBudget(
         model,
+        availableTools,
         token
       );
       stats.inputTokenBudget = inputTokenBudget;
@@ -410,6 +420,24 @@ export function createNewsletterChatRequestHandler(
               stopReason: "input-token-limit"
             })
           };
+        }
+
+        const requestedToolName = requestedToolNames.shift();
+        if (requestedToolName) {
+          const requestedTool = availableTools.find(
+            (tool) => tool.name === requestedToolName
+          );
+          if (!requestedTool) {
+            throw new Error(
+              `The attached tool "${requestedToolName}" is not currently available.`
+            );
+          }
+          toolOptions.tools = [requestedTool];
+          toolOptions.toolMode =
+            vscode.LanguageModelChatToolMode.Required;
+        } else {
+          toolOptions.tools = [...availableTools];
+          toolOptions.toolMode = vscode.LanguageModelChatToolMode.Auto;
         }
 
         const modelResponse = await model.sendRequest(
@@ -492,6 +520,7 @@ export function createNewsletterChatRequestHandler(
               inputTokenBudget,
               stats,
               outputSession,
+              availableToolNames,
               response,
               token
             )
@@ -885,9 +914,10 @@ function buildHistoricalPrompt(turn: vscode.ChatRequestTurn): string {
 
 async function calculateInputTokenBudget(
   model: vscode.LanguageModelChat,
+  tools: readonly vscode.LanguageModelChatTool[],
   token: vscode.CancellationToken
 ): Promise<number> {
-  const serializedTools = newsletterLanguageModelChatTools
+  const serializedTools = tools
     .map((tool) =>
       JSON.stringify({
         name: tool.name,
@@ -1174,18 +1204,15 @@ async function invokeRequestedTool(
   inputTokenBudget: number,
   stats: HandlerStats,
   outputSession: NewsletterOutputSession,
+  availableToolNames: ReadonlySet<string>,
   response: vscode.ChatResponseStream,
   token: vscode.CancellationToken
 ): Promise<vscode.LanguageModelToolResultPart> {
-  const localToolNames = new Set(
-    newsletterLanguageModelChatTools.map((tool) => tool.name)
-  );
-
-  if (!localToolNames.has(toolCall.name)) {
+  if (!availableToolNames.has(toolCall.name)) {
     stats.failedToolCalls += 1;
     return failedToolResult(
       toolCall,
-      `Tool "${toolCall.name}" is not one of the Aviators participant's local tools.`
+      `Tool "${toolCall.name}" is not available to the Aviators participant.`
     );
   }
 

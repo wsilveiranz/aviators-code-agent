@@ -9,7 +9,8 @@ const DEFAULT_EXCLUDE =
 export const WORKSPACE_TOOL_NAMES = {
   list: "aviators_listWorkspaceFiles",
   read: "aviators_readWorkspaceFile",
-  search: "aviators_searchWorkspaceFiles"
+  search: "aviators_searchWorkspaceFiles",
+  replace: "aviators_replaceWorkspaceText"
 } as const;
 
 export const workspaceLanguageModelChatTools:
@@ -80,6 +81,37 @@ export const workspaceLanguageModelChatTools:
         },
         required: ["query"]
       }
+    },
+    {
+      name: WORKSPACE_TOOL_NAMES.replace,
+      description:
+        "Replace exact text in an existing UTF-8 workspace file and save it. Prefer this for small, precise corrections such as changing a URL, name, date, or sentence after reading the file. The old text must match exactly; ambiguous matches are rejected unless replaceAll is explicitly true.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          path: {
+            type: "string",
+            description: "Workspace-relative file path or file URI."
+          },
+          oldText: {
+            type: "string",
+            description:
+              "Exact existing text to replace. Include enough surrounding text to make the match unique."
+          },
+          newText: {
+            type: "string",
+            description: "Replacement text."
+          },
+          replaceAll: {
+            type: "boolean",
+            description:
+              "Replace every exact match. Defaults to false and must only be true when every occurrence should change.",
+            default: false
+          }
+        },
+        required: ["path", "oldText", "newText"]
+      }
     }
   ];
 
@@ -103,8 +135,82 @@ export async function invokeWorkspaceTool(
     result = await readWorkspaceFile(record, token);
   } else if (name === WORKSPACE_TOOL_NAMES.search) {
     result = await searchWorkspaceFiles(record, token);
+  } else if (name === WORKSPACE_TOOL_NAMES.replace) {
+    result = await replaceWorkspaceText(record, token);
   } else {
     throw new Error(`Unknown workspace tool "${name}".`);
+  }
+
+  async function replaceWorkspaceText(
+    input: Record<string, unknown>,
+    token: vscode.CancellationToken
+  ): Promise<{
+    path: string;
+    replacements: number;
+    saved: true;
+  }> {
+    const path = readRequiredString(input.path, "path");
+    const oldText = readRequiredString(input.oldText, "oldText");
+    const newText = readString(input.newText, "newText");
+    const replaceAll = input.replaceAll === true;
+    if (oldText === newText) {
+      throw new Error("Workspace replacement text is unchanged.");
+    }
+    if (
+      oldText.length > MAX_READ_BYTES ||
+      newText.length > MAX_READ_BYTES
+    ) {
+      throw new Error(
+        "Workspace replacement text exceeds the 256 KB safety limit."
+      );
+    }
+
+    const uri = resolveWorkspacePath(path);
+    throwIfCancelled(token);
+    const document = await vscode.workspace.openTextDocument(uri);
+    const content = document.getText();
+    const offsets = findExactMatches(content, oldText);
+    if (offsets.length === 0) {
+      throw new Error(
+        `The exact text was not found in workspace file "${path}". Read the current file contents and retry with matching text.`
+      );
+    }
+    if (offsets.length > 1 && !replaceAll) {
+      throw new Error(
+        `The exact text occurs ${offsets.length} times in workspace file "${path}". Include more surrounding text or explicitly set replaceAll to true.`
+      );
+    }
+
+    const edit = new vscode.WorkspaceEdit();
+    const selectedOffsets = replaceAll ? offsets : offsets.slice(0, 1);
+    for (const offset of selectedOffsets) {
+      edit.replace(
+        uri,
+        new vscode.Range(
+          document.positionAt(offset),
+          document.positionAt(offset + oldText.length)
+        ),
+        newText
+      );
+    }
+
+    throwIfCancelled(token);
+    if (!(await vscode.workspace.applyEdit(edit))) {
+      throw new Error(
+        `VS Code rejected the exact text replacement for workspace file "${path}".`
+      );
+    }
+    if (!(await document.save())) {
+      throw new Error(
+        `The replacement was applied in the editor but workspace file "${path}" could not be saved.`
+      );
+    }
+
+    return {
+      path: vscode.workspace.asRelativePath(uri, true),
+      replacements: selectedOffsets.length,
+      saved: true
+    };
   }
 
   return new vscode.LanguageModelToolResult([
@@ -275,8 +381,29 @@ function readRequiredString(value: unknown, name: string): string {
   return result;
 }
 
+function readString(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`Workspace tool input "${name}" must be a string.`);
+  }
+  return value;
+}
+
 function readOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function findExactMatches(content: string, search: string): number[] {
+  const offsets: number[] = [];
+  let offset = 0;
+  while (offset <= content.length - search.length) {
+    const match = content.indexOf(search, offset);
+    if (match < 0) {
+      break;
+    }
+    offsets.push(match);
+    offset = match + search.length;
+  }
+  return offsets;
 }
 
 function clampNumber(

@@ -73,6 +73,17 @@ The saved browser state is kept under the extension's global storage and reused 
 
 Run **Aviators: Check LinkedIn Session Status** to validate that a non-expired LinkedIn `li_at` authentication cookie exists on an exact LinkedIn domain. LinkedIn may require sign-in or manual verification again at any time.
 
+The extension does not bundle or install Playwright MCP. With the default configuration, Docker pulls `mcr.microsoft.com/playwright/mcp` when the image is missing. To use the npm distribution instead, configure:
+
+```json
+"aviators.playwright.mcpCommand": {
+  "command": "npx",
+  "args": ["--yes", "@playwright/mcp@latest"]
+}
+```
+
+Run **Aviators: Check Playwright MCP Status** to verify that VS Code has discovered `browser_navigate`. If it has not, run **MCP: List Servers**, start and trust Playwright, and inspect **Show Output**. The extension waits briefly for delayed MCP tool discovery before reporting a missing Playwright tool.
+
 ## Use `@aviators`
 
 Open Copilot Chat, choose a model in the Copilot model picker, and address the participant:
@@ -95,7 +106,11 @@ The participant uses `request.model`, so each request runs with the model select
 
 Without a slash command, the participant acts as a newsletter-aware specialist and detects the relevant action from the prompt. Requests to create or initialize a template are handled deterministically without calling a model. The resulting file becomes the current chat newsletter, and `/ace`, `/product`, and `/community` update that same artifact independently. Only an explicit request for the full or entire newsletter loads every section workflow.
 
-The participant reconstructs prior user and assistant text from the current chat, injects the contents of explicitly referenced text files, and has private read-only tools to list, read, and search files in the open workspace. Workspace tools cannot access paths outside the workspace and do not modify files.
+The participant reconstructs prior user and assistant text from the current chat and injects the contents of explicitly referenced text files. For each request, it exposes every tool currently registered in `vscode.lm.tools`, including available GitHub Copilot, built-in, extension, and MCP tools. It also supplies private workspace list/read/search helpers and an exact-text replacement tool for reliable small edits when a general patch tool cannot apply its patch. Explicitly attached `#tool` references are honored as required calls.
+
+`aviators_replaceWorkspaceText` is workspace-bound, requires the old text to match the current file exactly, rejects ambiguous matches by default, applies the change through a VS Code workspace edit, and saves the document. This is the preferred fallback for corrections such as updating an existing LinkedIn URL without regenerating a newsletter section.
+
+The stable Chat Participant API does not currently expose Agent mode's enabled/disabled tool-picker map to Marketplace extensions. As a result, `@aviators` can use all tools published through the stable Language Model Tools API, but it cannot inherit Copilot-only proposed/internal capabilities or exactly mirror the user's Agent mode tool selection.
 
 ### Language-model tools
 
@@ -134,6 +149,7 @@ The preview command opens the HTML document in a VS Code editor. It does not run
 - **Aviators: Set Email API Key**
 - **Aviators: Sign in to LinkedIn**
 - **Aviators: Check LinkedIn Session Status**
+- **Aviators: Check Playwright MCP Status**
 
 ## Develop and package
 

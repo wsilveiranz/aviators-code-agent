@@ -33,6 +33,7 @@
     "onCommand:aviators.setEmailApiKey",
     "onCommand:aviators.signInToLinkedIn",
     "onCommand:aviators.checkLinkedInSessionStatus",
+    "onCommand:aviators.checkPlaywrightMcpStatus",
     "onMcpServerDefinitionProvider:aviators.newsletter"
   ],
   "contributes": {
@@ -415,6 +416,10 @@
       {
         "command": "aviators.checkLinkedInSessionStatus",
         "title": "Aviators: Check LinkedIn Session Status"
+      },
+      {
+        "command": "aviators.checkPlaywrightMcpStatus",
+        "title": "Aviators: Check Playwright MCP Status"
       }
     ],
     "configuration": {

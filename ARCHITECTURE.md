@@ -11,7 +11,7 @@ flowchart LR
     RequestModel --> Participant
     Participant --> LM["VS Code Language Model API"]
     LM --> LocalTools["Seven Aviators LM tools"]
-    LocalTools --> Core["Core skills and registry"]
+    LocalTools --> Core["Skills, tools, and shared core"]
     LocalTools --> Bridge["LmToolBridge"]
     Bridge --> NativeMCP["VS Code native MCP tools"]
     NativeMCP --> Playwright["Playwright stdio MCP"]
@@ -31,9 +31,11 @@ flowchart LR
 | Configuration/secrets | `src/extension/config.ts` | Read VS Code settings and store/read/delete the EmailCompanion API key through `SecretStorage`. |
 | LinkedIn session | `src/extension/linkedinSession.ts` | Launch a headed Playwright MCP process, require manual sign-in/verification, save storage state, and validate cookies. |
 | Output | `src/extension/output.ts` | Detect section HTML, safely merge it into a workspace file, and open previews. |
-| Core registry | `src/core/agent.ts` | Define four deterministic skills and MCP-backed core tool definitions. |
-| Core prompts | `src/core/skillPrompts.ts` | Provide workflow-specific prompts and anti-fabrication rules. |
-| Newsletter utilities | `src/core/newsletter.ts` | Parse Q&A, detect section anchors, summarize tool results, and assemble the document. |
+| Core registry | `src/core/agent.ts` | Compose and dispatch the deterministic skills and MCP-backed tools. |
+| Skills | `src/skills/` (`aceAviator.ts`, `productGroup.ts`, `communityNews.ts`, `dateWindow.ts`) | Provide deterministic newsletter section and date-window generation. |
+| Tools | `src/tools/` (`emailTools.ts`, `playwrightTools.ts`) | Define MCP-backed EmailCompanion and Playwright operations. |
+| Prompts | `src/prompts/` (`skillPrompts.ts`, `skillDetection.ts`, four `.md` files, `md.d.ts`) | Provide workflow-specific prompts, prompt detection, and anti-fabrication rules. |
+| Shared core | `src/core/` (`newsletter.ts`, `newsletterRequest.ts`, `types.ts`, `mcpBridge.ts`, `calendarDate.ts`, `contentSafety.ts`) | Provide framework-independent kernel, composition, domain, and document utilities shared by skills and tools. |
 
 ## Activation and contributions
 
@@ -86,6 +88,10 @@ The participant uses `ChatRequest.request.model`; it never creates an Azure/Open
 
 Before each model request, the participant counts tokens with the selected model. It preserves the system guardrails and current prompt, then trims older history/tool groups if necessary. Tool rounds are limited by `aviators.maxToolRounds` (default 12, allowed range 1-50). Individual tool invocations have a two-minute timeout.
 
+### Prompt authoring and bundling
+
+Workflow prompts are authored as plain Markdown in `src/prompts/aceAviator.md`, `communityNews.md`, `productGroup.md`, and `dateWindow.md`; edit those files without TypeScript template-literal escaping. `skillPrompts.ts` imports and assembles them, while `skillDetection.ts` keeps pure detection logic importable by the plain-Node test build without requiring `.md` files. `esbuild.mjs` inlines Markdown with `loader: { ".md": "text" }` during `npm run compile`; there is no runtime file read, and `.vscodeignore` excludes `src/**` so the Markdown files are not separate VSIX files.
+
 ### Command routing
 
 - `/newsletter` injects all workflows and requires Ace Aviator → Product Group → Community order.
@@ -107,13 +113,13 @@ The tool list passed to the selected model is fixed:
 | `aviators_createAceAviator` | Local deterministic Ace Aviator HTML skill. |
 | `aviators_createProductGroupNews` | Local deterministic Product Group HTML skill. |
 | `aviators_createCommunityNews` | Local deterministic escaped Community batch skill. |
-| `aviators_scrapeLinkedIn` | Core registry tool backed by Playwright MCP navigation and snapshots. |
-| `aviators_resolveRedirects` | Core registry tool backed by Playwright MCP navigation. |
-| `aviators_getTechCommunityBlogPosts` | Core registry tool backed by Playwright MCP navigation and snapshots. |
+| `aviators_scrapeLinkedIn` | Playwright-backed tool composed by the core registry. |
+| `aviators_resolveRedirects` | Playwright-backed tool composed by the core registry. |
+| `aviators_getTechCommunityBlogPosts` | Playwright-backed tool composed by the core registry. |
 
 The first four tools call core `execute` functions directly. The final three create an `LmToolBridge`, rebuild the core registry with that bridge, and invoke native MCP tools through `vscode.lm.invokeTool`. LinkedIn scraping and redirect resolution can request user confirmation before network access.
 
-The core registry also defines lower-level EmailCompanion and Playwright operations used by workflow code, including `getEmailFromMCP`, `playwright_navigate`, `playwright_snapshot`, `playwright_click`, and `playwright_type`.
+The core registry composes lower-level EmailCompanion and Playwright operations from `src/tools/`, including `getEmailFromMCP`, `playwright_navigate`, `playwright_snapshot`, `playwright_click`, and `playwright_type`.
 
 ## Native MCP server providers
 
@@ -198,17 +204,31 @@ src/
 │   ├── linkedinSession.ts    headed sign-in/session validation
 │   ├── output.ts             workspace HTML persistence
 │   └── config.ts             settings and SecretStorage
+├── skills/
+│   ├── aceAviator.ts         Ace Aviator skill
+│   ├── productGroup.ts       Product Group skill
+│   ├── communityNews.ts      Community skill
+│   └── dateWindow.ts         date-window skill
+├── tools/
+│   ├── emailTools.ts         EmailCompanion tool
+│   └── playwrightTools.ts    Playwright-backed data tools
+├── prompts/
+│   ├── aceAviator.md         Ace Aviator workflow prompt
+│   ├── communityNews.md      Community News workflow prompt
+│   ├── productGroup.md       Product Group workflow prompt
+│   ├── dateWindow.md         date-window workflow prompt
+│   ├── md.d.ts               Markdown module declaration
+│   ├── skillDetection.ts     pure prompt detection logic
+│   └── skillPrompts.ts       Markdown prompt imports and assembly
 └── core/
-    ├── agent.ts              skill/tool registry
-    ├── skillPrompts.ts       workflow prompts
+    ├── agent.ts              skill/tool registry and composition
     ├── newsletter.ts         document utilities/template
-    ├── mcpBridge.ts          bridge contracts/session validation
-    ├── emailTools.ts         EmailCompanion tool
-    ├── playwrightTools.ts    Playwright-backed data tools
-    ├── dateWindow.ts         date-window skill
-    ├── aceAviator.ts         Ace Aviator skill
-    ├── productGroup.ts       Product Group skill
-    ├── communityNews.ts      Community skill
+    ├── newsletterRequest.ts  request parsing
+    ├── mcpBridge.ts          bridge contracts
+    ├── mcpClientProtocol.ts  MCP client protocol types
+    ├── calendarDate.ts       calendar/date domain helpers
+    ├── contentSafety.ts      HTML and URL safety helpers
+    ├── index.ts              shared exports
     └── types.ts              shared definitions
 test/                         plain TypeScript test scripts
 esbuild.mjs                   extension bundler

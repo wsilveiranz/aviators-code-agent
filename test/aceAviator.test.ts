@@ -4,7 +4,7 @@ import {
   extractName,
   generateHTML as generateAceAviatorHTML,
   parseQAPairs,
-} from '../src/core/aceAviator.js';
+} from '../src/skills/aceAviator.js';
 import { sampleAceAviatorEmail } from './sampleData.js';
 
 type TestFunction = () => void;

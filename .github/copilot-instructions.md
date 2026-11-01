@@ -34,16 +34,30 @@ The shipped runtime is a VS Code extension. Install the generated VSIX with **Ex
 - `output.ts` — safe workspace-relative HTML file selection, section merge, and preview.
 - `config.ts` — VS Code settings and EmailCompanion API key `SecretStorage`.
 
+### `src/skills/`
+
+- `dateWindow.ts`, `aceAviator.ts`, `productGroup.ts`, `communityNews.ts` — deterministic date-window and newsletter section skills.
+
+### `src/tools/`
+
+- `emailTools.ts`, `playwrightTools.ts` — MCP-backed EmailCompanion and Playwright tool definitions.
+
+### `src/prompts/`
+
+- `aceAviator.md`, `communityNews.md`, `productGroup.md`, `dateWindow.md` — plain Markdown workflow prompts; edit these files to change prompt text without TypeScript escaping.
+- `skillDetection.ts` — pure `SkillPromptKey` detection logic, kept separate so plain Node tests do not require `.md` files.
+- `skillPrompts.ts` — imports the Markdown prompts and exports `SKILL_PROMPTS` and `buildDynamicPrompt`.
+- `md.d.ts` — ambient declaration for `.md` imports.
+
 ### `src/core/`
 
-Framework-independent newsletter logic:
+Framework-independent shared kernel, composition, and domain layer:
 
-- `agent.ts` — skill/tool registry and dispatch.
-- `dateWindow.ts`, `aceAviator.ts`, `productGroup.ts`, `communityNews.ts` — deterministic skills.
-- `emailTools.ts`, `playwrightTools.ts`, `mcpBridge.ts` — MCP-backed operations and bridge contracts.
-- `skillPrompts.ts` — workflow prompts loaded according to the request/command.
-- `newsletter.ts` — template, section detection, Q&A parsing, result summarization, and assembly.
-- `types.ts` — shared JSON-schema skill/tool definitions.
+- `agent.ts` — skill/tool registry, composition, and dispatch.
+- `newsletter.ts`, `newsletterRequest.ts` — document composition and request parsing.
+- `mcpBridge.ts`, `mcpClientProtocol.ts` — MCP bridge contracts and protocol types.
+- `calendarDate.ts`, `contentSafety.ts` — shared date, HTML, and URL helpers.
+- `types.ts`, `index.ts` — shared JSON-schema definitions and exports.
 
 ### Tests and build
 
@@ -55,9 +69,11 @@ Framework-independent newsletter logic:
 
 ## Runtime conventions
 
-- Use TypeScript for all extension and core code.
+- Use TypeScript throughout the extension and shared newsletter code.
 - Source imports include `.js` specifiers where required for emitted/bundled module resolution.
-- Keep VS Code-specific APIs in `src/extension/`; keep reusable newsletter logic in `src/core/`.
+- Keep VS Code-specific APIs in `src/extension/`; keep reusable logic split between `src/skills/`, `src/tools/`, `src/prompts/`, and the shared kernel/composition/domain layer in `src/core/`.
+- Prompt Markdown is inlined by `esbuild.mjs` (`loader: { ".md": "text" }`) during `npm run compile`; rebuild after prompt edits. There is no runtime file read, and `.vscodeignore` excludes `src/**`, so `.md` files are not shipped separately in the VSIX.
+- Keep `vscode` imports out of `src/core/`, `src/skills/`, `src/tools/`, and `src/prompts/`; ESLint enforces this boundary.
 - Skills/tools use `{ name, description, parameters, execute }` with JSON Schema parameters.
 - Skills return structured results, normally `{ success, html, ... }` for generated sections.
 - Section HTML uses anchors `aceaviator`, `productnews`, and `communitynews`.

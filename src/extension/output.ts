@@ -9,12 +9,12 @@ import {
 import { extractRequestedNewsletterFileName } from "../core/newsletterRequest.js";
 import {
   findCommunityNewsBatchResult
-} from "../core/communityNews.js";
+} from "../skills/communityNews.js";
 import type {
   NewsletterSection,
   NewsletterSections
 } from "../core/newsletter.js";
-import type { CommunityBatchItem } from "../core/communityNews.js";
+import type { CommunityBatchItem } from "../skills/communityNews.js";
 import {
   CommunityGenerationCoordinator,
   CommunityGenerationRun,
@@ -35,6 +35,12 @@ export const NEWSLETTER_PROPOSAL_SCHEME = "aviators-newsletter-proposal";
 
 const COMMUNITY_NEWS_TOOL_NAME = "aviators_createCommunityNews";
 const SCRAPE_LINKEDIN_TOOL_NAME = "aviators_scrapeLinkedIn";
+const NEWSLETTER_OUTPUT_TOOL_NAMES = new Set([
+  "aviators_createAceAviator",
+  "aviators_createProductGroupNews",
+  COMMUNITY_NEWS_TOOL_NAME,
+  SCRAPE_LINKEDIN_TOOL_NAME
+]);
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 const MONTH_NAMES = [
@@ -696,6 +702,10 @@ export class NewsletterOutputSession {
     result: Pick<vscode.LanguageModelToolResult, "content">,
     token: vscode.CancellationToken
   ): Promise<NewsletterWriteResult | undefined> {
+    if (!NEWSLETTER_OUTPUT_TOOL_NAMES.has(toolCall.name)) {
+      return undefined;
+    }
+
     const failure = findExplicitToolFailure(result.content);
     if (failure) {
       throw new NewsletterOutputError(

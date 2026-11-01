@@ -1,6 +1,6 @@
-import type { Skill } from './types.js';
+import type { Skill } from '../core/types.js';
 
-import { escapeHtml, toSafeHttpUrl } from './contentSafety.js';
+import { escapeHtml, toSafeHttpUrl } from '../core/contentSafety.js';
 
 export interface CommunityItem {
   externalLink?: string;

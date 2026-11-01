@@ -16,7 +16,12 @@ module.exports = [
     }
   },
   {
-    files: ["src/core/**/*.ts"],
+    files: [
+      "src/core/**/*.ts",
+      "src/skills/**/*.ts",
+      "src/tools/**/*.ts",
+      "src/prompts/**/*.ts"
+    ],
     rules: {
       "no-restricted-imports": [
         "error",

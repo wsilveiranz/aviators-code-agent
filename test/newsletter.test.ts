@@ -7,7 +7,7 @@ import {
   extractRequestedNewsletterFileName,
   isNewsletterTemplateRequest,
 } from '../src/core/newsletterRequest.js';
-import { detectRequiredSkills } from '../src/core/skillPrompts.js';
+import { detectRequiredSkills } from '../src/prompts/skillDetection.js';
 import {
   TOOL_RESULT_TRUNCATION_MARKER,
   findExplicitToolFailure,

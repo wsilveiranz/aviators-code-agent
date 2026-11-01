@@ -2,13 +2,13 @@ import {
   extractFinalPageUrl,
   filterByDateWindow,
   parseBlogPosts,
-} from '../src/core/playwrightTools.js';
+} from '../src/tools/playwrightTools.js';
 import {
   filterPosts,
   generateHTML as generateProductGroupHTML,
   selectProductGroupPosts,
   type ProductGroupPost,
-} from '../src/core/productGroup.js';
+} from '../src/skills/productGroup.js';
 import { feb2026DateWindow, sampleBlogSnapshot } from './sampleData.js';
 
 type TestFunction = () => void;

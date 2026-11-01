@@ -1,12 +1,12 @@
-import { aceAviatorSkill } from './aceAviator.js';
-import { communityNewsSkill } from './communityNews.js';
-import { dateWindowSkill } from './dateWindow.js';
-import { createEmailCompanionTool } from './emailTools.js';
+import { aceAviatorSkill } from '../skills/aceAviator.js';
+import { communityNewsSkill } from '../skills/communityNews.js';
+import { dateWindowSkill } from '../skills/dateWindow.js';
+import { createEmailCompanionTool } from '../tools/emailTools.js';
 import type { McpBridge, McpBridgeFactory } from './mcpBridge.js';
 import {
   createPlaywrightTools,
-} from './playwrightTools.js';
-import { productGroupSkill } from './productGroup.js';
+} from '../tools/playwrightTools.js';
+import { productGroupSkill } from '../skills/productGroup.js';
 import type {
   FunctionDefinition,
   Skill,

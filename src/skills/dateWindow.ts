@@ -1,4 +1,4 @@
-import type { Skill } from './types.js';
+import type { Skill } from '../core/types.js';
 
 function getFirstDayOfMonth(
   year: number,

@@ -11,8 +11,7 @@ import {
   type CommunityBatchItem,
   type CommunityItem,
   type CommunityNewsParams,
-} from '../src/core/communityNews.js';
-import { SKILL_PROMPTS } from '../src/core/skillPrompts.js';
+} from '../src/skills/communityNews.js';
 import {
   TOOL_RESULT_TRUNCATION_MARKER,
   truncateSerializedToolResult,
@@ -23,6 +22,11 @@ import {
   readCommunityResumeMetadata,
 } from '../src/extension/communityGeneration.js';
 import { sampleLinkedInPosts } from './sampleData.js';
+
+const communityPromptMarkdown = readFileSync(
+  resolve(__dirname, '..', '..', 'src', 'prompts', 'communityNews.md'),
+  'utf8',
+);
 
 type TestFunction = () => void | Promise<void>;
 
@@ -669,7 +673,7 @@ if (await test('Community schemas and prompt reject prior HTML state', () => {
     'Core schema should reject unknown properties',
   );
   assertTrue(
-    !SKILL_PROMPTS.communityNews.includes('existingHtml'),
+    !communityPromptMarkdown.includes('existingHtml'),
     'Skill prompt should not mention existingHtml',
   );
 

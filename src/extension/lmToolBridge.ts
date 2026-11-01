@@ -4,6 +4,8 @@ import type { McpBridge, McpServer } from "../core/mcpBridge.js";
 import type { JsonObject } from "../core/types.js";
 
 const TOOL_NAME_PREFIX_SEPARATORS = new Set([".", ":", "/", "_", "-"]);
+const TOOL_DISCOVERY_TIMEOUT_MS = 10_000;
+const TOOL_DISCOVERY_POLL_MS = 250;
 const textDecoder = new TextDecoder();
 
 export interface McpTextContent {
@@ -88,17 +90,60 @@ export class LmToolBridge implements McpBridge {
     let resolvedName = this.resolvedToolNames.get(cacheKey);
     if (!resolvedName) {
       try {
-        resolvedName = resolveLmToolName(
+        resolvedName = await waitForLmToolName(
           toolName,
-          vscode.lm.tools.map((tool) => tool.name)
+          this.cancellationToken
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(
-          `Unable to resolve ${server} MCP tool "${toolName}": ${message}`
+          `Unable to resolve ${server} MCP tool "${toolName}": ${message} Run "MCP: List Servers", then start and trust the Playwright server and inspect its output.`
         );
       }
       this.resolvedToolNames.set(cacheKey, resolvedName);
+    }
+
+    async function waitForLmToolName(
+      canonicalName: string,
+      token: vscode.CancellationToken
+    ): Promise<string> {
+      const deadline = Date.now() + TOOL_DISCOVERY_TIMEOUT_MS;
+      let lastError: unknown;
+
+      while (true) {
+        if (token.isCancellationRequested) {
+          throw new vscode.CancellationError();
+        }
+        try {
+          return resolveLmToolName(
+            canonicalName,
+            vscode.lm.tools.map((tool) => tool.name)
+          );
+        } catch (error) {
+          lastError = error;
+        }
+        if (Date.now() >= deadline) {
+          throw lastError;
+        }
+        await delay(TOOL_DISCOVERY_POLL_MS, token);
+      }
+    }
+
+    function delay(
+      milliseconds: number,
+      token: vscode.CancellationToken
+    ): Promise<void> {
+      return new Promise((resolve, reject) => {
+        const handle = setTimeout(() => {
+          subscription.dispose();
+          resolve();
+        }, milliseconds);
+        const subscription = token.onCancellationRequested(() => {
+          clearTimeout(handle);
+          subscription.dispose();
+          reject(new vscode.CancellationError());
+        });
+      });
     }
 
     const result = await vscode.lm.invokeTool(

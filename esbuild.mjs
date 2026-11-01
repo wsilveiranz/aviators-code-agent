@@ -11,6 +11,7 @@ const context = await esbuild.context({
   target: "node20",
   external: ["vscode"],
   sourcemap: true,
+  loader: { ".md": "text" },
   logLevel: "info"
 });
 

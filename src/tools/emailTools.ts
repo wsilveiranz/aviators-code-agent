@@ -1,6 +1,6 @@
-import type { McpBridge } from './mcpBridge.js';
-import type { Tool } from './types.js';
-import { errorMessage } from './types.js';
+import type { McpBridge } from '../core/mcpBridge.js';
+import type { Tool } from '../core/types.js';
+import { errorMessage } from '../core/types.js';
 
 export interface EmailParams {
   subject: string;

@@ -12,6 +12,9 @@
   },
   "include": [
     "src/core/**/*.ts",
+    "src/skills/**/*.ts",
+    "src/tools/**/*.ts",
+    "src/prompts/**/*.ts",
     "src/extension/communityGeneration.ts",
     "src/extension/toolResult.ts",
     "test/**/*.ts"
