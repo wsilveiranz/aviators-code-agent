@@ -19,8 +19,19 @@ import type {
 } from "../core/index.js";
 import { LmToolBridge } from "./lmToolBridge.js";
 import { workspaceLanguageModelChatTools } from "./workspaceTools.js";
+import {
+  NewsletterWorkflowRuntime,
+  type BeginNewsletterInput,
+  type NewsletterTargetInput
+} from "./workflowRuntime.js";
 
 export const LANGUAGE_MODEL_TOOL_NAMES = {
+  beginNewsletterWorkflow: "aviators_beginNewsletterWorkflow",
+  createNewsletterTemplate: "aviators_createNewsletterTemplate",
+  getNewsletterWorkflow: "aviators_getNewsletterWorkflow",
+  reviewNewsletterWorkflow: "aviators_reviewNewsletterWorkflow",
+  persistNewsletterDraft: "aviators_persistNewsletterDraft",
+  openNewsletterPreview: "aviators_openNewsletterPreview",
   computeDateWindow: "aviators_computeDateWindow",
   createAceAviator: "aviators_createAceAviator",
   createProductGroupNews: "aviators_createProductGroupNews",
@@ -37,6 +48,7 @@ interface PlaywrightNavigateInput {
 }
 
 interface ScrapeLinkedInInput {
+  workflowId?: string;
   urls?: string[];
   inputJson?: string;
   batchSize?: number;
@@ -83,17 +95,59 @@ const techCommunityBlogDefinition = getRegistryToolDefinition(
   "getTechCommunityBlogPosts"
 );
 
+const targetProperties = {
+  month: { type: "string", description: "Newsletter month and year, e.g. November 2026." },
+  fileName: { type: "string", description: "Optional safe .html filename." },
+  workspaceFolder: { type: "string", description: "Optional exact open workspace folder URI." }
+};
+const handleProperties = { workflowId: { type: "string", description: "Handle returned by beginNewsletterWorkflow." } };
+export const workflowChatTools: readonly vscode.LanguageModelChatTool[] = [
+  {
+    name: LANGUAGE_MODEL_TOOL_NAMES.beginNewsletterWorkflow,
+    description: "Begin a target-bound newsletter workflow, preserving its accumulated pending draft across completed section commands. Selected sections run Ace, Product, then Community. Incomplete work must be completed or discarded first; saving requires explicit user persistence.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {
+      ...targetProperties, sections: { type: "array", minItems: 1, uniqueItems: true,
+        items: { type: "string", enum: ["aceAviator", "productGroup", "community"] } }
+    }, required: ["month", "sections"] }
+  },
+  {
+    name: LANGUAGE_MODEL_TOOL_NAMES.createNewsletterTemplate,
+    description: "Create a missing newsletter template or open an existing document. Never overwrite an existing file.",
+    inputSchema: { type: "object", additionalProperties: false, properties: targetProperties, required: ["month"] }
+  },
+  {
+    name: LANGUAGE_MODEL_TOOL_NAMES.getNewsletterWorkflow,
+    description: "Inspect current-workflow stagedSections, all accumulated draftSections, trusted Community continuation URLs, proposal, apply and saved status.",
+    inputSchema: { type: "object", additionalProperties: false, properties: handleProperties, required: ["workflowId"] }
+  },
+  {
+    name: LANGUAGE_MODEL_TOOL_NAMES.reviewNewsletterWorkflow,
+    description: "Open the staged proposal diff for user review. Does not apply or save generated changes.",
+    inputSchema: { type: "object", additionalProperties: false, properties: handleProperties, required: ["workflowId"] }
+  },
+  {
+    name: LANGUAGE_MODEL_TOOL_NAMES.persistNewsletterDraft,
+    description: "Persist all accumulated draft sections for one newsletter after explicit user request. A workflowId selects its target, including changes from later section commands. Omit it to select a pending target; ambiguous drafts require a picker. Reject unfinished workflows.",
+    inputSchema: { type: "object", additionalProperties: false, properties: handleProperties }
+  },
+  {
+    name: LANGUAGE_MODEL_TOOL_NAMES.openNewsletterPreview,
+    description: "Open the persisted newsletter preview, using an optional workflow handle or safe workspace selection.",
+    inputSchema: { type: "object", additionalProperties: false, properties: handleProperties }
+  }
+];
+
 const newsletterLanguageModelChatTools: readonly vscode.LanguageModelChatTool[] =
   [
     toChatTool(LANGUAGE_MODEL_TOOL_NAMES.computeDateWindow, dateWindowSkill),
-    toChatTool(LANGUAGE_MODEL_TOOL_NAMES.createAceAviator, aceAviatorSkill),
+    toChatTool(LANGUAGE_MODEL_TOOL_NAMES.createAceAviator, withWorkflowSchema(aceAviatorSkill)),
     toChatTool(
       LANGUAGE_MODEL_TOOL_NAMES.createProductGroupNews,
-      productGroupSkill
+      withWorkflowSchema(productGroupSkill)
     ),
     toChatTool(
       LANGUAGE_MODEL_TOOL_NAMES.createCommunityNews,
-      communityNewsSkill
+      withWorkflowSchema(communityNewsSkill)
     ),
     toChatTool(
       LANGUAGE_MODEL_TOOL_NAMES.getEmailFromMCP,
@@ -101,7 +155,7 @@ const newsletterLanguageModelChatTools: readonly vscode.LanguageModelChatTool[] 
     ),
     toChatTool(
       LANGUAGE_MODEL_TOOL_NAMES.scrapeLinkedIn,
-      scrapeLinkedInDefinition
+      withWorkflowSchema(scrapeLinkedInDefinition)
     ),
     toChatTool(
       LANGUAGE_MODEL_TOOL_NAMES.resolveRedirects,
@@ -115,6 +169,7 @@ const newsletterLanguageModelChatTools: readonly vscode.LanguageModelChatTool[] 
       LANGUAGE_MODEL_TOOL_NAMES.getTechCommunityBlogPosts,
       techCommunityBlogDefinition
     ),
+    ...workflowChatTools,
     ...workspaceLanguageModelChatTools
   ];
 
@@ -139,7 +194,7 @@ export function getAvailableLanguageModelChatTools():
   return [...tools.values()];
 }
 
-export function registerNewsletterLanguageModelTools(): vscode.Disposable[] {
+export function registerNewsletterLanguageModelTools(workflow: NewsletterWorkflowRuntime): vscode.Disposable[] {
   return [
     vscode.lm.registerTool(
       LANGUAGE_MODEL_TOOL_NAMES.computeDateWindow,
@@ -153,21 +208,21 @@ export function registerNewsletterLanguageModelTools(): vscode.Disposable[] {
       new LocalLanguageModelTool<AceAviatorParams>(aceAviatorSkill, {
         displayName: "Create Ace Aviator Section",
         invocationMessage: "Creating the Ace Aviator section..."
-      })
+      }, workflow)
     ),
     vscode.lm.registerTool(
       LANGUAGE_MODEL_TOOL_NAMES.createProductGroupNews,
       new LocalLanguageModelTool<ProductGroupParams>(productGroupSkill, {
         displayName: "Create Product Group News",
         invocationMessage: "Creating the Product Group News section..."
-      })
+      }, workflow)
     ),
     vscode.lm.registerTool(
       LANGUAGE_MODEL_TOOL_NAMES.createCommunityNews,
       new LocalLanguageModelTool<CommunityNewsParams>(communityNewsSkill, {
         displayName: "Create Community News",
         invocationMessage: "Creating the Community News section..."
-      })
+      }, workflow)
     ),
     vscode.lm.registerTool(
       LANGUAGE_MODEL_TOOL_NAMES.getEmailFromMCP,
@@ -194,7 +249,7 @@ export function registerNewsletterLanguageModelTools(): vscode.Disposable[] {
             } using the configured Playwright MCP server.`
           };
         }
-      })
+      }, workflow)
     ),
     vscode.lm.registerTool(
       LANGUAGE_MODEL_TOOL_NAMES.resolveRedirects,
@@ -237,24 +292,33 @@ export function registerNewsletterLanguageModelTools(): vscode.Disposable[] {
           invocationMessage: "Fetching Tech Community blog posts..."
         }
       )
-    )
+    ),
+    ...registerWorkflowTools(workflow)
   ];
 }
 
 class LocalLanguageModelTool<TInput extends ToolInput>
-  implements vscode.LanguageModelTool<TInput>
+  implements vscode.LanguageModelTool<TInput & { workflowId?: string }>
 {
   constructor(
     private readonly definition: ExecutableDefinition<TInput, unknown>,
-    private readonly presentation: ToolPresentation<TInput>
+    private readonly presentation: ToolPresentation<TInput>,
+    private readonly workflow?: NewsletterWorkflowRuntime
   ) {}
 
   async invoke(
-    options: vscode.LanguageModelToolInvocationOptions<TInput>,
+    options: vscode.LanguageModelToolInvocationOptions<TInput & { workflowId?: string }>,
     token: vscode.CancellationToken
   ): Promise<vscode.LanguageModelToolResult> {
     throwIfCancelled(token);
-    const result = await this.definition.execute(options.input);
+    const execute = async (input: TInput): Promise<unknown> => {
+      const result = await this.definition.execute(input);
+      throwIfCancelled(token);
+      return result;
+    };
+    const result = this.workflow
+      ? await this.workflow.execute(this.definition.name, options.input, execute, token)
+      : await execute(options.input);
     throwIfCancelled(token);
     return toToolResult(this.presentation.displayName, result);
   }
@@ -275,7 +339,8 @@ class RegistryLanguageModelTool<TInput extends ToolInput>
 {
   constructor(
     private readonly registryToolName: string,
-    private readonly presentation: ToolPresentation<TInput>
+    private readonly presentation: ToolPresentation<TInput>,
+    private readonly workflow?: NewsletterWorkflowRuntime
   ) {}
 
   async invoke(
@@ -296,10 +361,14 @@ class RegistryLanguageModelTool<TInput extends ToolInput>
       options.tokenizationOptions
     );
     const registry = createAgentRegistry(bridge);
-    const result = await registry.executeTool(
-      this.registryToolName,
-      options.input
-    );
+    const execute = async (input: TInput): Promise<unknown> => {
+      const result = await registry.executeTool(this.registryToolName, input);
+      throwIfCancelled(token);
+      return result;
+    };
+    const result = this.workflow
+      ? await this.workflow.execute(this.registryToolName, options.input, execute, token)
+      : await execute(options.input);
 
     throwIfCancelled(token);
     return toToolResult(this.presentation.displayName, result);
@@ -326,7 +395,61 @@ function getRegistryToolDefinition(
   }
   return definition;
 }
+function withWorkflowSchema(
+    definition: Pick<ExecutableDefinition<never, unknown>, "description" | "parameters">
+  ): Pick<ExecutableDefinition<never, unknown>, "description" | "parameters"> {
+    return {
+      description: definition.description + " Supply workflowId to stage the full result into the host workflow.",
+      parameters: {
+        ...definition.parameters,
+        properties: { ...definition.parameters.properties, workflowId: {
+          type: "string", description: "Optional host workflow handle; omit for deterministic legacy behavior."
+        } }
+      }
+    };
+  }
 
+function registerWorkflowTools(workflow: NewsletterWorkflowRuntime): vscode.Disposable[] {
+    function register<T extends object>(name: string, execute: (input: T) => Promise<unknown>): vscode.Disposable {
+      return vscode.lm.registerTool(name, {
+        async invoke(options: vscode.LanguageModelToolInvocationOptions<T>, token: vscode.CancellationToken) {
+          throwIfCancelled(token);
+          return toToolResult("Newsletter workflow", await execute(options.input));
+        },
+        prepareInvocation(_options: vscode.LanguageModelToolInvocationPrepareOptions<T>, token: vscode.CancellationToken) {
+          throwIfCancelled(token);
+          return { invocationMessage: "Updating newsletter workflow..." };
+        }
+      });
+    }
+    return [
+      register<BeginNewsletterInput>(LANGUAGE_MODEL_TOOL_NAMES.beginNewsletterWorkflow, input => workflow.begin(input)),
+      register<NewsletterTargetInput>(LANGUAGE_MODEL_TOOL_NAMES.createNewsletterTemplate, input => workflow.createTemplate(input)),
+      register<{ workflowId: string }>(LANGUAGE_MODEL_TOOL_NAMES.getNewsletterWorkflow, async input => workflow.get(input.workflowId)),
+      register<{ workflowId: string }>(LANGUAGE_MODEL_TOOL_NAMES.reviewNewsletterWorkflow, input => workflow.review(input.workflowId)),
+      vscode.lm.registerTool<{ workflowId?: string }>(LANGUAGE_MODEL_TOOL_NAMES.persistNewsletterDraft, {
+        async invoke(options, token) {
+          throwIfCancelled(token);
+          return toToolResult("Persist newsletter draft", await workflow.persist(options.input.workflowId, token));
+        },
+        prepareInvocation(options, token) {
+          throwIfCancelled(token);
+          return {
+            invocationMessage: "Persisting accumulated newsletter draft...",
+            confirmationMessages: {
+              title: "Persist newsletter draft?",
+              message: "Save every accumulated section in the selected newsletter draft to disk. " +
+                (options.input.workflowId
+                  ? `Target: ${workflow.get(options.input.workflowId).path}.`
+                  : "If several newsletters have drafts, select the target in the picker.") +
+                " Incomplete workflows and conflicting editor changes will not be overwritten."
+            }
+          };
+        }
+      }),
+      register<{ workflowId?: string }>(LANGUAGE_MODEL_TOOL_NAMES.openNewsletterPreview, input => workflow.preview(input.workflowId))
+    ];
+  }
 function toChatTool(
   name: string,
   definition: Pick<ExecutableDefinition<never, unknown>, "description" | "parameters">

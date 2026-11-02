@@ -8,6 +8,8 @@ const tests = [
   'newsletter.test.js',
   'mcpBridge.test.js',
   'mcpClientProtocol.test.js',
+  'newsletterWorkflow.test.js',
+  'workflowRuntime.test.js',
 ];
 
 function runTest(testFile: string): Promise<number> {

@@ -2,35 +2,39 @@
 
 ## Overview
 
-Aviators Newsletter is a Visual Studio Code extension. It does not host an Express API, web UI, or model endpoint. GitHub Copilot Chat supplies the selected language model, VS Code supplies the chat/tool/MCP APIs, and the extension supplies newsletter orchestration, deterministic section builders, MCP-backed data tools, and workspace HTML output.
+Aviators Newsletter is an Agent Plugins 1.0 package plus a companion Visual Studio Code extension. It does not host an Express API, web UI, or model endpoint. The Copilot harness supplies the selected model, conversation loop, and context; plugin skills/agent instructions describe workflows; the companion supplies bounded operations, deterministic builders, native MCP services, trusted proposal state, and editor review.
 
 ```mermaid
 flowchart LR
-    User[Copilot Chat user] --> Participant["@aviators participant"]
-    Picker[Copilot model picker] --> RequestModel["ChatRequest.request.model"]
-    RequestModel --> Participant
-    Participant --> LM["VS Code Language Model API"]
-    LM --> LocalTools["Seven Aviators LM tools"]
+    User[Copilot Chat user] --> Plugin["Explicit skills / Aviators custom agent"]
+    Picker[Copilot model picker] --> Harness["Copilot-owned conversation loop"]
+    Plugin --> Harness
+    Harness --> LocalTools["Companion extension tools"]
     LocalTools --> Core["Skills, tools, and shared core"]
     LocalTools --> Bridge["LmToolBridge"]
     Bridge --> NativeMCP["VS Code native MCP tools"]
     NativeMCP --> Playwright["Playwright stdio MCP"]
     NativeMCP --> Email["EmailCompanion HTTP MCP"]
-    Core --> Output["Workspace newsletter HTML"]
+    LocalTools --> State["Target-bound workflow / pending proposal"]
+    Core --> State
+    State --> Review["VS Code diff / explicit apply-discard"]
+    Review --> Output["Workspace newsletter HTML"]
 ```
 
 ## Runtime components
 
 | Component | Location | Responsibility |
 |---|---|---|
-| Extension activation | `src/extension/extension.ts` | Register the participant, tools, commands, output manager, LinkedIn session commands, and MCP provider. |
-| Chat participant | `src/extension/participant.ts` | Route slash commands, build prompts, use `request.model`, run the tool loop, enforce limits, and stream chat output. |
-| Language-model tools | `src/extension/toolRegistry.ts` | Register four local section/date tools and three MCP-backed data tools. |
+| Extension activation | `src/extension/extension.ts` | Register workflow/section tools, editor commands, shared output state, LinkedIn commands, MCP provider, and temporary Local participant. |
+| Chat participant | `src/extension/participant.ts` | Temporary Local fallback only; not supported in the Copilot harness. |
+| Language-model tools | `src/extension/toolRegistry.ts` | Register six workflow/editor tools, four deterministic section/date tools, and five source tools. |
+| Workflow adapter | `src/extension/workflowRuntime.ts` | Bind explicit workspace targets and integrate trusted state with full tool-result staging. |
+| Workflow state | `src/core/newsletterWorkflow.ts` | Enforce ordered section transitions independently of VS Code and chat history. |
 | MCP bridge | `src/extension/lmToolBridge.ts` | Resolve MCP tool names from `vscode.lm.tools` and invoke them with the chat request's tool token. |
 | Native MCP provider | `src/extension/mcpProvider.ts` | Programmatically define Playwright stdio and EmailCompanion HTTP servers. |
 | Configuration/secrets | `src/extension/config.ts` | Read VS Code settings and store/read/delete the EmailCompanion API key through `SecretStorage`. |
 | LinkedIn session | `src/extension/linkedinSession.ts` | Launch a headed Playwright MCP process, require manual sign-in/verification, save storage state, and validate cookies. |
-| Output | `src/extension/output.ts` | Detect section HTML, safely merge it into a workspace file, and open previews. |
+| Output | `src/extension/output.ts` | Validate targets, serialize draft staging, protect proposal conflicts, and provide explicit diff/apply/discard and previews. |
 | Core registry | `src/core/agent.ts` | Compose and dispatch the deterministic skills and MCP-backed tools. |
 | Skills | `src/skills/` (`aceAviator.ts`, `productGroup.ts`, `communityNews.ts`, `dateWindow.ts`) | Provide deterministic newsletter section and date-window generation. |
 | Tools | `src/tools/` (`emailTools.ts`, `playwrightTools.ts`) | Define MCP-backed EmailCompanion and Playwright operations. |
@@ -41,17 +45,35 @@ flowchart LR
 
 `package.json` declares:
 
-- Chat participant ID `aviators.newsletter`, exposed as `@aviators`.
-- Slash commands `/newsletter`, `/ace`, `/product`, `/community`, and `/preview`.
-- Seven language-model tools.
-- Four Command Palette commands.
+- Temporary Local-only participant ID `aviators.newsletter`, exposed as `@aviators`.
+- Fifteen registered language-model tools, including target/workflow, review and confirmed persist operations.
+- Nine Command Palette commands, including pending proposal review/apply/discard and workflow status.
 - Six `aviators.*` settings.
 - MCP server definition provider ID `aviators.newsletter`.
 - Extension entry point `dist/extension.cjs`.
 
-`activate()` creates shared runtime objects and adds every registration/disposable to the extension context. The extension is activated by its participant, tools, commands, or MCP provider.
+`activate()` creates shared runtime objects and adds registrations to the extension context. Copilot invokes registered tools independently of the participant; result staging must therefore happen inside the workflow-aware tool adapter, not only the legacy chat loop.
 
-## Chat request flow
+## Plugin and Copilot request flow
+
+`plugin\plugin.json` declares Agent Plugins 1.0. Six `plugin\skills\<name>\SKILL.md` files provide explicit namespaced slash entry points, and `plugin\com.github.copilot\agents\aviators.agent.md` supplies the persistent specialist role without a hardcoded model.
+
+`scripts\build-plugin.mjs` materializes `dist\plugin` from those authored wrappers, a shared workflow reference, and canonical `src\prompts\*.md`. This avoids two hand-edited copies of detailed workflow guidance. Only the materialized/extracted package is installable; the source template's generated references are not complete.
+
+The plugin intentionally does not duplicate the extension-owned Playwright/EmailCompanion definitions in `mcp.json`. Dynamic SecretStorage authentication, browser-state paths, and editor operations remain in the connected companion.
+
+1. A skill creates/opens a template or begins a month/target-bound workflow with explicitly selected sections.
+2. Copilot uses the registered tools and its normal context/approval/model loop.
+3. Workflow-aware section tools receive the returned opaque `workflowId` and stage full validated results before any model-output truncation.
+4. Trusted coordinator state enforces section order, pending Community batches, and stale/superseded continuation checks.
+5. Status/review tools expose progress and the full accumulated target diff. Completed section commands reuse one pending proposal and its original conflict baseline; new workflow handles rebind its apply/discard guards. `draftSections` reports accumulated content separately from the current workflow's `stagedSections`.
+6. Explicit `/aviators-newsletter:persist` invokes confirmed whole-draft apply/save; a known older handle selects the latest draft for its target. Without a target, multiple pending newsletters require a picker. Incomplete workflows block both chat and palette persistence. The palette uses the same proposal and safety checks.
+
+The handle is not a durable chat identity or an authorization token. No private/proposed session API is assumed. State is in memory; reload invalidates handles. Client tools require the contributing editor to remain connected.
+
+## Temporary Local fallback request flow
+
+This legacy flow is retained until the small live Copilot acceptance checks in the README pass. It does not describe the new harness, and will be removed rather than maintained as a second permanent implementation.
 
 ```mermaid
 sequenceDiagram
@@ -64,7 +86,7 @@ sequenceDiagram
 
     User->>Chat: Prompt or slash command
     Chat->>Chat: Select workflow prompts and history
-    Chat->>Model: sendRequest(messages, seven tools)
+    Chat->>Model: sendRequest(messages, available tools)
     loop Until the model stops or maxToolRounds is reached
         Model-->>Chat: Text and/or tool calls
         Chat-->>User: Stream model text
@@ -75,7 +97,7 @@ sequenceDiagram
         end
         Tool-->>Chat: LanguageModelToolResult
         opt Result contains one recognizable section
-            Chat->>File: Merge and save HTML
+            Chat->>File: Stage merged HTML for explicit review
             Chat-->>User: File link and Open newsletter button
         end
         Chat->>Model: Tool results plus continuation guardrails
@@ -84,17 +106,17 @@ sequenceDiagram
 
 ### Model selection and token control
 
-The participant uses `ChatRequest.request.model`; it never creates an Azure/OpenAI client and has no independent model configuration. The user selects the model in Copilot Chat.
+Only the temporary Local participant uses `ChatRequest.request.model`. The Copilot plugin does not call models at all; the host uses the user's selection. Neither path creates an independent model client.
 
-Before each model request, the participant counts tokens with the selected model. It preserves the system guardrails and current prompt, then trims older history/tool groups if necessary. Tool rounds are limited by `aviators.maxToolRounds` (default 12, allowed range 1-50). Individual tool invocations have a two-minute timeout.
+Local counts/trims tokens and uses `aviators.maxToolRounds` (default 12, range 1-50). That setting does not limit the Copilot harness. Bounded companion operations retain cancellation/timeouts independently of the host conversation loop.
 
 ### Prompt authoring and bundling
 
-Workflow prompts are authored as plain Markdown in `src/prompts/aceAviator.md`, `communityNews.md`, `productGroup.md`, and `dateWindow.md`; edit those files without TypeScript template-literal escaping. `skillPrompts.ts` imports and assembles them, while `skillDetection.ts` keeps pure detection logic importable by the plain-Node test build without requiring `.md` files. `esbuild.mjs` inlines Markdown with `loader: { ".md": "text" }` during `npm run compile`; there is no runtime file read, and `.vscodeignore` excludes `src/**` so the Markdown files are not separate VSIX files.
+Detailed workflow guidance is canonical Markdown in `src/prompts/aceAviator.md`, `communityNews.md`, `productGroup.md`, and `dateWindow.md`. Local still inlines it with esbuild's text loader. The plugin build copies it as discoverable references beside explicit `SKILL.md` wrappers. `.vscodeignore` excludes both source and `dist/plugin/**` from the companion VSIX; the separate plugin archive carries those resources.
 
 ### Command routing
 
-- `/newsletter` injects all workflows and requires Ace Aviator → Product Group → Community order.
+- `/newsletter` creates/opens the template without loading generation workflows.
 - `/ace` injects only the Ace Aviator workflow.
 - `/product` injects date-window and Product Group workflows.
 - `/community` injects date-window and Community workflows.
@@ -103,9 +125,11 @@ Workflow prompts are authored as plain Markdown in `src/prompts/aceAviator.md`, 
 
 The base and workflow prompts require real user/tool data and prefer omission or an explicit failure over fabricated content.
 
-## Seven language-model tools
+## Tool boundary
 
-The tool list passed to the selected model is fixed:
+Six additional public operations are `beginNewsletterWorkflow`, `createNewsletterTemplate`, `getNewsletterWorkflow`, `reviewNewsletterWorkflow`, `persistNewsletterDraft`, and `openNewsletterPreview`. Generation builders and `scrapeLinkedIn` take an optional `workflowId`; plugin skills supply it to enable trusted staging/continuation. Without it, builders preserve standalone deterministic results for the Local adapter.
+
+Existing domain/source operations:
 
 | Registered tool | Execution |
 |---|---|
@@ -113,11 +137,13 @@ The tool list passed to the selected model is fixed:
 | `aviators_createAceAviator` | Local deterministic Ace Aviator HTML skill. |
 | `aviators_createProductGroupNews` | Local deterministic Product Group HTML skill. |
 | `aviators_createCommunityNews` | Local deterministic escaped Community batch skill. |
+| `getEmailFromMCP` | EmailCompanion-backed source retrieval. |
 | `aviators_scrapeLinkedIn` | Playwright-backed tool composed by the core registry. |
 | `aviators_resolveRedirects` | Playwright-backed tool composed by the core registry. |
 | `aviators_getTechCommunityBlogPosts` | Playwright-backed tool composed by the core registry. |
+| `playwright_navigate` | Bounded external-page navigation through native Playwright. |
 
-The first four tools call core `execute` functions directly. The final three create an `LmToolBridge`, rebuild the core registry with that bridge, and invoke native MCP tools through `vscode.lm.invokeTool`. LinkedIn scraping and redirect resolution can request user confirmation before network access.
+The four deterministic tools reuse section/date builders. The five source tools create an `LmToolBridge`, compose the core registry, and invoke native MCP through `vscode.lm.invokeTool`. Preserve the incoming opaque invocation token and reject a missing token; static API support is not proof of live nested-token/approval behavior in every harness.
 
 The core registry composes lower-level EmailCompanion and Playwright operations from `src/tools/`, including `getEmailFromMCP`, `playwright_navigate`, `playwright_snapshot`, `playwright_click`, and `playwright_type`.
 
@@ -189,7 +215,7 @@ Target selection prefers explicit request references, then the active editor's w
 
 Existing documents are split using section headings and merged with the built-in table-of-contents/template. `/preview` and the open command use `openTextDocument`/`showTextDocument` to open the HTML in an editor and never start a web server.
 
-Community accumulation is extension-state-backed rather than model-backed. Each participant request owns an opaque generation token: its first successful batch replaces the persisted Community section, and later batches combine with structured items retained for that same generation. A newer generation invalidates older continuations, duplicate URLs are removed, and the complete section is regenerated under one canonical heading. Prior newsletter HTML and the generation token are not part of the tool schema, so the model cannot expose or forge either state.
+Community accumulation is extension-state-backed rather than model-backed. A workflow retains the generation record and structured items; its first successful batch replaces stale Community content, and later batches combine with trusted items. A newer generation invalidates old continuations, duplicates are removed, and HTML is regenerated under one heading. Prior newsletter HTML and internal generation state are never accepted as authority from the model. The external workflow handle refers to validated state, not caller-supplied generation metadata.
 
 ## Source layout
 
@@ -198,7 +224,8 @@ src/
 ├── extension/
 │   ├── extension.ts          activation and registrations
 │   ├── participant.ts        Copilot Chat/model tool loop
-│   ├── toolRegistry.ts       seven language-model tools
+│   ├── toolRegistry.ts       fifteen language-model tools
+│   ├── workflowRuntime.ts    target-bound workflow adapter
 │   ├── lmToolBridge.ts       VS Code MCP tool invocation bridge
 │   ├── mcpProvider.ts        native MCP definitions
 │   ├── linkedinSession.ts    headed sign-in/session validation
@@ -224,6 +251,7 @@ src/
     ├── agent.ts              skill/tool registry and composition
     ├── newsletter.ts         document utilities/template
     ├── newsletterRequest.ts  request parsing
+    ├── newsletterWorkflow.ts ordered workflow state
     ├── mcpBridge.ts          bridge contracts
     ├── mcpClientProtocol.ts  MCP client protocol types
     ├── calendarDate.ts       calendar/date domain helpers
@@ -237,10 +265,11 @@ package.json                  VS Code manifest and scripts
 
 ## Build, test, and distribution
 
-1. `npm run compile` runs `tsc --noEmit` and bundles the CommonJS extension entry with esbuild.
+1. `npm run compile` runs `tsc --noEmit`, bundles the CommonJS extension, and materializes `dist\plugin`.
 2. `npm run lint` runs ESLint across the repository.
-3. `npm test` compiles core/test TypeScript into `out/` and runs `out/test/run.js`.
+3. `npm test` compiles/runs the Node suites and validates materialized plugin contracts.
 4. `npm run package` invokes the VSIX prepublish compile and `vsce package --no-dependencies`.
-5. A tagged GitHub release workflow repeats lint/test/package and uploads `aviators-newsletter.vsix`.
+5. `npm run package:plugin` archives the closed plugin asset list as a versioned `.tar.gz`.
+6. Tagged GitHub releases publish matching versioned VSIX/plugin archives; no secrets, browser state, or unrelated sources are included.
 
-Release VSIX files are the documented distribution mechanism.
+The plugin and companion are installed separately. Static checks and fake source/state fixtures do not establish live Copilot discovery, nested MCP approvals, or real-service authentication; see the README's small manual acceptance checklist.

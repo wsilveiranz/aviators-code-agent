@@ -1,4 +1,4 @@
-name: Release VSIX
+name: Release plugin and VSIX
 
 on:
   push:
@@ -41,11 +41,16 @@ jobs:
       - name: Package extension
         run: npm run package -- --out "aviators-newsletter-${GITHUB_REF_NAME#v}.vsix"
 
-      - name: Upload VSIX
+      - name: Package plugin
+        run: npm run package:plugin
+
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: aviators-newsletter-vsix
-          path: aviators-newsletter-*.vsix
+          name: aviators-newsletter-artifacts
+          path: |
+            aviators-newsletter-*.vsix
+            release/aviators-newsletter-plugin-*.tar.gz
           if-no-files-found: error
 
   release:
@@ -55,10 +60,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download VSIX
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: aviators-newsletter-vsix
+          name: aviators-newsletter-artifacts
           path: release-assets
 
       - name: Create or update GitHub Release
@@ -69,13 +74,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          vsix="$(find release-assets -maxdepth 1 -name 'aviators-newsletter-*.vsix' -type f -print -quit)"
+          vsix="$(find release-assets -name 'aviators-newsletter-*.vsix' -type f -print -quit)"
+          plugin="$(find release-assets -name 'aviators-newsletter-plugin-*.tar.gz' -type f -print -quit)"
           test -f "$vsix"
+          test -f "$plugin"
 
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" "$vsix" --clobber
+            gh release upload "$TAG_NAME" "$vsix" "$plugin" --clobber
           else
-            gh release create "$TAG_NAME" "$vsix" \
+            gh release create "$TAG_NAME" "$vsix" "$plugin" \
               --verify-tag \
               --generate-notes \
               --title "$TAG_NAME"

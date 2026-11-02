@@ -24,9 +24,11 @@ import {
 import type { NewsletterOutputSession } from "./output.js";
 import { getAvailableLanguageModelChatTools } from "./toolRegistry.js";
 import {
+  findExplicitToolFailure,
   serializeToolResultContent,
   truncateSerializedToolResult
 } from "./toolResult.js";
+import { NewsletterWorkflowRuntime, readNewsletterToolObject } from "./workflowRuntime.js";
 import { buildReferenceContext } from "./referenceContext.js";
 import {
   invokeWorkspaceTool,
@@ -157,6 +159,7 @@ interface TokenFitResult {
 }
 
 interface HandlerStats {
+  readonly managedWorkflowIds: Set<string>;
   toolRounds: number;
   toolCalls: number;
   failedToolCalls: number;
@@ -177,12 +180,14 @@ type HandlerStatus =
   | "delegated";
 
 interface ResultMetadataExtra {
+  readonly workflowIds?: readonly string[];
   readonly stopReason?: string;
   readonly pendingToolCalls?: number;
   readonly errorCode?: string;
 }
 
 export interface NewsletterChatResultMetadata {
+  readonly workflowIds?: readonly string[];
   readonly participant: typeof NEWSLETTER_PARTICIPANT_ID;
   readonly status: HandlerStatus;
   readonly command: string | null;
@@ -212,10 +217,12 @@ interface CommunityContinuationCandidate {
 }
 
 export function createNewsletterChatRequestHandler(
-  outputManager: NewsletterOutputManager = new NewsletterOutputManager()
+  outputManager: NewsletterOutputManager = new NewsletterOutputManager(),
+  workflow?: NewsletterWorkflowRuntime
 ): vscode.ChatRequestHandler {
   return async (request, context, response, token) => {
     const stats: HandlerStats = {
+      managedWorkflowIds: new Set(),
       toolRounds: 0,
       toolCalls: 0,
       failedToolCalls: 0,
@@ -235,7 +242,7 @@ export function createNewsletterChatRequestHandler(
         request,
         stats,
         status,
-        extra,
+        { ...(stats.managedWorkflowIds.size ? { workflowIds: [...stats.managedWorkflowIds] } : {}), ...extra },
         outputSession?.getCommunityResumeMetadata()
       );
     const commandRoute = request.command
@@ -478,6 +485,19 @@ export function createNewsletterChatRequestHandler(
               "The selected model returned no usable response."
             );
           }
+          if (workflow) {
+            const incomplete = [...stats.managedWorkflowIds].filter(id => workflow.get(id).status !== "staged");
+            if (incomplete.length) {
+              for (const id of incomplete) {
+                const current = workflow.get(id);
+                response.markdown(
+                  `\n\nNewsletter workflow ${id} is ${current.status}, not complete. ` +
+                  `Inspect aviators_getNewsletterWorkflow with workflowId "${id}" and continue using its trusted status/URLs.`
+                );
+              }
+              return resultMetadata("stopped", { stopReason: "managed-workflow-pending", workflowIds: incomplete });
+            }
+          }
           if (outputSession.hasPendingCommunity()) {
             const resumable =
               outputSession.getCommunityResumeMetadata() !== undefined;
@@ -522,7 +542,8 @@ export function createNewsletterChatRequestHandler(
               outputSession,
               availableToolNames,
               response,
-              token
+              token,
+              workflow
             )
           );
         }
@@ -631,6 +652,16 @@ export class NewsletterChatFollowupProvider
           )
         : undefined;
     const followups: vscode.ChatFollowup[] = [];
+    if (metadata.stopReason === "managed-workflow-pending" && Array.isArray(metadata.workflowIds)) {
+      for (const id of metadata.workflowIds) {
+        if (typeof id !== "string" || !/^[a-f0-9-]{36}$/i.test(id)) continue;
+        followups.push({
+          prompt: `Inspect aviators_getNewsletterWorkflow with workflowId "${id}", then continue that workflow using its trusted status and remaining URLs. Do not start a separate Local generation.`,
+          label: "Continue managed newsletter workflow",
+          participant: NEWSLETTER_PARTICIPANT_ID
+        });
+      }
+    }
 
     if (
       metadata.status === "completed" &&
@@ -1206,7 +1237,8 @@ async function invokeRequestedTool(
   outputSession: NewsletterOutputSession,
   availableToolNames: ReadonlySet<string>,
   response: vscode.ChatResponseStream,
-  token: vscode.CancellationToken
+  token: vscode.CancellationToken,
+  workflow?: NewsletterWorkflowRuntime
 ): Promise<vscode.LanguageModelToolResultPart> {
   if (!availableToolNames.has(toolCall.name)) {
     stats.failedToolCalls += 1;
@@ -1217,7 +1249,17 @@ async function invokeRequestedTool(
   }
 
   try {
-    outputSession.noteToolInvocation(toolCall);
+    const suppliedWorkflowId: unknown = Reflect.get(toolCall.input, "workflowId");
+    const managed = suppliedWorkflowId !== undefined;
+    if (managed) {
+      if (!workflow || typeof suppliedWorkflowId !== "string") {
+        throw new NewsletterOutputError("A valid shared newsletter workflow is required for workflow-aware calls.");
+      }
+      workflow.get(suppliedWorkflowId);
+      stats.managedWorkflowIds.add(suppliedWorkflowId);
+    } else {
+      outputSession.noteToolInvocation(toolCall);
+    }
     const toolResultTokenBudget = Math.max(
       1,
       Math.min(
@@ -1249,11 +1291,32 @@ async function invokeRequestedTool(
             )
         : undefined
     );
-    const writeResult = await outputSession.handleToolResult(
-      toolCall,
-      result,
-      token
-    );
+    const payload = readNewsletterToolObject(result.content);
+    let managedId = managed && typeof suppliedWorkflowId === "string" ? suppliedWorkflowId : undefined;
+    if (toolCall.name === "aviators_beginNewsletterWorkflow" && typeof payload?.workflowId === "string")
+      managedId = payload.workflowId;
+    if (managedId !== undefined) {
+      if (!workflow || !payload) throw new NewsletterOutputError("The managed tool returned no full structured workflow result.");
+      const current = workflow.get(managedId);
+      stats.managedWorkflowIds.add(managedId);
+      stats.outputUri = current.outputUri;
+      for (const section of current.stagedSections) {
+        if (section !== current.pendingSection && !stats.generatedSections.includes(section))
+          stats.generatedSections.push(section);
+      }
+      const failure = findExplicitToolFailure(payload.result ?? payload);
+      if (failure) {
+        stats.failedToolCalls++;
+        response.markdown(`\n\nManaged newsletter tool failed: ${failure}. Existing output was not applied.`);
+      }
+      response.markdown(
+        `\n\nNewsletter workflow ${managedId}: ${current.status}; ` +
+        `proposal ${current.applyStatus}; saved ${current.saved}.`
+      );
+    }
+    const writeResult = managed
+      ? undefined
+      : await outputSession.handleToolResult(toolCall, result, token);
     if (writeResult) {
       const isFirstStagedChange = stats.outputUri === undefined;
       if (

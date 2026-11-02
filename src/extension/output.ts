@@ -111,6 +111,9 @@ interface NewsletterProposal {
   section: NewsletterSection;
   complete: boolean;
   status: "pending" | "applied" | "discarded";
+  saved?: boolean;
+  applying?: boolean;
+  canApply?: () => boolean;
   onDiscard?: () => void;
 }
 
@@ -171,7 +174,9 @@ export class NewsletterOutputManager
     uri: vscode.Uri,
     section: NewsletterSection,
     html: string,
-    workspaceFolder: vscode.WorkspaceFolder
+    workspaceFolder: vscode.WorkspaceFolder,
+    token?: vscode.CancellationToken,
+    onCommit?: () => void
   ): Promise<NewsletterWriteResult> {
     return this.updateNewsletter(
       proposalId,
@@ -180,7 +185,9 @@ export class NewsletterOutputManager
       workspaceFolder,
       (sections) => {
         sections[section] = html.trim();
-      }
+      },
+      token,
+      onCommit
     );
   }
 
@@ -210,7 +217,9 @@ export class NewsletterOutputManager
     items: CommunityBatchItem[],
     hasMore: boolean,
     workspaceFolder: vscode.WorkspaceFolder,
-    write: CommunityBatchWrite
+    write: CommunityBatchWrite,
+    token?: vscode.CancellationToken,
+    onCommit?: () => void
   ): Promise<NewsletterWriteResult> {
     const target = uri.toString();
     const result = await this.updateNewsletter(
@@ -225,13 +234,15 @@ export class NewsletterOutputManager
           items
         );
         sections.community = prepared.html;
-        this.communityGenerations.commitBatch(
+        return () => this.communityGenerations.commitBatch(
           target,
           write,
           prepared,
           { hasMore }
         );
-      }
+      },
+      token,
+      onCommit
     );
     return { ...result, complete: !hasMore };
   }
@@ -241,10 +252,13 @@ export class NewsletterOutputManager
     uri: vscode.Uri,
     section: NewsletterSection,
     workspaceFolder: vscode.WorkspaceFolder,
-    update: (sections: NewsletterSections) => void
+    update: (sections: NewsletterSections) => void | (() => void),
+    token?: vscode.CancellationToken,
+    onCommit?: () => void
   ): Promise<NewsletterWriteResult> {
     try {
       await this.enqueueWrite(uri, async () => {
+        if (token) throwIfCancelled(token);
         const existingProposal = this.proposals.get(proposalId);
         if (
           existingProposal &&
@@ -269,11 +283,12 @@ export class NewsletterOutputManager
               currentContent: existingProposal.proposedContent
             }
           : await readNewsletterSnapshot(uri);
+        if (token) throwIfCancelled(token);
         const sections = parseNewsletterSections(
           snapshot.currentContent,
           uri
         );
-        update(sections);
+        const commit = update(sections);
         const proposedContent = buildNewsletter(sections);
         const proposal: NewsletterProposal =
           existingProposal ?? {
@@ -286,13 +301,16 @@ export class NewsletterOutputManager
             complete: true,
             status: "pending"
           };
+        if (token) throwIfCancelled(token);
+        commit?.();
         proposal.proposedContent = proposedContent;
         proposal.section = section;
         this.proposals.set(proposalId, proposal);
+        onCommit?.();
         this.fireProposalChanged(proposal);
       });
     } catch (error) {
-      if (error instanceof NewsletterOutputError) {
+      if (error instanceof NewsletterOutputError || error instanceof vscode.CancellationError) {
         throw error;
       }
       const detail = error instanceof Error ? error.message : String(error);
@@ -324,45 +342,82 @@ export class NewsletterOutputManager
     );
   }
 
-  async applyProposal(proposalId: string): Promise<vscode.Uri> {
+  async applyProposal(proposalId: string, token?: vscode.CancellationToken): Promise<vscode.Uri> {
     const proposal = this.getPendingProposal(proposalId);
     await this.enqueueWrite(proposal.uri, async () => {
-      const current = await readOptionalTextFile(proposal.uri);
-      if (current !== proposal.originalContent) {
-        throw new NewsletterOutputError(
-          `The newsletter changed after this proposal was created. Review and regenerate before applying: ${proposal.uri.toString()}`
+      this.getPendingProposal(proposalId);
+      proposal.applying = true;
+      try {
+        if (token) throwIfCancelled(token);
+        if (!vscode.workspace.workspaceFolders?.some(
+          folder => sameUriLocation(folder.uri, proposal.workspaceFolder.uri)
+        ) || !this.isOutputUri(proposal.workspaceFolder, proposal.uri)) {
+          throw new NewsletterOutputError("The proposal workspace/target is no longer available or safe.");
+        }
+        if (proposal.canApply && !proposal.canApply()) {
+          throw new NewsletterOutputError("Complete the active workflow and all pending batches before applying.");
+        }
+        const openDocument = vscode.workspace.textDocuments.find(
+          document => sameUriLocation(document.uri, proposal.uri)
         );
+        if (openDocument?.isDirty) {
+          throw new NewsletterOutputError("The newsletter has unsaved editor changes. Save and regenerate before applying.");
+        }
+        const current = await readOptionalTextFile(proposal.uri);
+        let diskContent: string | undefined;
+        try { diskContent = textDecoder.decode(await vscode.workspace.fs.readFile(proposal.uri)); }
+        catch (error) { if (!isFileNotFound(error)) throw error; }
+        if (current !== proposal.originalContent || diskContent !== proposal.originalContent) {
+          throw new NewsletterOutputError(
+            `The newsletter changed after this proposal was created. Review and regenerate before applying: ${proposal.uri.toString()}`
+          );
+        }
+        await vscode.workspace.fs.createDirectory(
+          getUriDirectory(proposal.uri)
+        );
+        const edit = new vscode.WorkspaceEdit();
+        if (proposal.originalContent === undefined) {
+          edit.createFile(proposal.uri, { ignoreIfExists: false });
+          edit.insert(
+            proposal.uri,
+            new vscode.Position(0, 0),
+            proposal.proposedContent
+          );
+        } else {
+          const document = await vscode.workspace.openTextDocument(
+            proposal.uri
+          );
+          if (document.isDirty || document.getText() !== proposal.originalContent) {
+            throw new NewsletterOutputError("The newsletter editor changed while applying. Regenerate the proposal.");
+          }
+          edit.replace(
+            proposal.uri,
+            new vscode.Range(
+              document.positionAt(0),
+              document.positionAt(document.getText().length)
+            ),
+            proposal.proposedContent
+          );
+        }
+        if (token) throwIfCancelled(token);
+        if (!(await vscode.workspace.applyEdit(edit))) {
+          throw new NewsletterOutputError(
+            `VS Code could not apply the newsletter proposal: ${proposal.uri.toString()}`
+          );
+        }
+        proposal.status = "applied";
+        proposal.saved = false;
+        const document = await vscode.workspace.openTextDocument(proposal.uri);
+        if (document.getText() !== proposal.proposedContent || !(await document.save()) ||
+            document.isDirty || document.getText() !== proposal.proposedContent) {
+          throw new NewsletterOutputError(
+            `Changes were applied to the editor but could not be saved: ${proposal.uri.toString()}`
+          );
+        }
+        proposal.saved = true;
+      } finally {
+        proposal.applying = false;
       }
-      await vscode.workspace.fs.createDirectory(
-        getUriDirectory(proposal.uri)
-      );
-      const edit = new vscode.WorkspaceEdit();
-      if (proposal.originalContent === undefined) {
-        edit.createFile(proposal.uri, { ignoreIfExists: false });
-        edit.insert(
-          proposal.uri,
-          new vscode.Position(0, 0),
-          proposal.proposedContent
-        );
-      } else {
-        const document = await vscode.workspace.openTextDocument(
-          proposal.uri
-        );
-        edit.replace(
-          proposal.uri,
-          new vscode.Range(
-            document.positionAt(0),
-            document.positionAt(document.getText().length)
-          ),
-          proposal.proposedContent
-        );
-      }
-      if (!(await vscode.workspace.applyEdit(edit))) {
-        throw new NewsletterOutputError(
-          `VS Code could not apply the newsletter proposal: ${proposal.uri.toString()}`
-        );
-      }
-      proposal.status = "applied";
     });
     this.recentByWorkspace.set(
       proposal.workspaceFolder.uri.toString(),
@@ -379,17 +434,18 @@ export class NewsletterOutputManager
 
   setProposalDiscardHandler(
     proposalId: string,
-    onDiscard: () => void
+    onDiscard: () => void,
+    replace = false
   ): void {
     const proposal = this.proposals.get(proposalId);
-    if (proposal && !proposal.onDiscard) {
+    if (proposal && (replace || !proposal.onDiscard)) {
       proposal.onDiscard = onDiscard;
     }
   }
 
   private getPendingProposal(proposalId: string): NewsletterProposal {
     const proposal = this.proposals.get(proposalId);
-    if (!proposal || proposal.status !== "pending") {
+    if (!proposal || proposal.status !== "pending" || proposal.applying) {
       throw new NewsletterOutputError(
         "This newsletter proposal is no longer pending."
       );
@@ -455,8 +511,53 @@ export class NewsletterOutputManager
     return this.proposals.get(proposalId)?.status === "pending";
   }
 
+  getProposalStatus(proposalId: string): { status: "pending" | "applied" | "discarded" | "none"; saved: boolean } {
+    const proposal = this.proposals.get(proposalId);
+    return { status: proposal?.status ?? "none", saved: proposal?.saved === true };
+  }
+
+  setProposalApplyGuard(proposalId: string, canApply: () => boolean): void {
+    const proposal = this.proposals.get(proposalId);
+    if (proposal) proposal.canApply = canApply;
+  }
+
+  async selectProposal(value?: unknown): Promise<string | undefined> {
+    if (value !== undefined) {
+      if (typeof value !== "string") throw new NewsletterOutputError("Invalid proposal identifier.");
+      this.getPendingProposal(value);
+      return value;
+    }
+    const items = [...this.proposals.values()].filter(proposal => proposal.status === "pending" && !proposal.applying)
+      .map(proposal => ({ label: getUriFileName(proposal.uri), detail: proposal.uri.toString(), id: proposal.id }));
+    if (!items.length) throw new NewsletterOutputError("No pending newsletter proposals.");
+    return (await vscode.window.showQuickPick(items, { title: "Aviators: Select pending changes" }))?.id;
+  }
+
+  async resolveWorkflowTarget(input: { month: string; fileName?: string; workspaceFolder?: string }):
+    Promise<{ month: string; uri: vscode.Uri; folder: vscode.WorkspaceFolder }> {
+    const month = typeof input.month === "string" ? normalizeMonthYear(input.month) : undefined;
+    if (!month) throw new NewsletterOutputError("A valid newsletter month and year are required.");
+    let folder: vscode.WorkspaceFolder;
+    if (input.workspaceFolder !== undefined) {
+      const selected = vscode.workspace.workspaceFolders?.find(
+        candidate => candidate.uri.toString() === input.workspaceFolder
+      );
+      if (!selected) throw new NewsletterOutputError("The workspace folder URI is not an open workspace.");
+      folder = selected;
+    } else {
+      folder = await selectWorkspaceFolder([], "create a newsletter");
+    }
+    const uri = this.getOutputUri(folder, month, input.fileName);
+    if (!this.isOutputUri(folder, uri)) throw new NewsletterOutputError("Unsafe newsletter target.");
+    return { month, uri, folder };
+  }
+
   async openNewsletter(candidate?: unknown): Promise<vscode.Uri> {
     if (candidate instanceof vscode.Uri) {
+      const folder = vscode.workspace.getWorkspaceFolder(candidate);
+      if (!folder || !this.isOutputUri(folder, candidate)) {
+        throw new NewsletterOutputError("Preview must target a newsletter inside the configured workspace output folder.");
+      }
       await openNewsletterUri(candidate);
       return candidate;
     }
@@ -584,10 +685,18 @@ export class NewsletterOutputManager
     monthYear?: string,
     requestedFileName?: string
   ): vscode.Uri {
+    if (requestedFileName !== undefined && !isSafeNewsletterFileName(requestedFileName)) {
+      throw new NewsletterOutputError("The newsletter filename must be a safe .html filename.");
+    }
+
     return vscode.Uri.joinPath(
       getOutputDirectory(folder),
       requestedFileName ?? deriveNewsletterFileName(monthYear)
     );
+  }
+
+  async withTargetLock<T>(uri: vscode.Uri, operation: () => Promise<T>): Promise<T> {
+    return this.enqueueWrite(uri, operation);
   }
 
   isOutputUri(
@@ -606,7 +715,7 @@ export class NewsletterOutputManager
     uri: vscode.Uri,
     operation: () => Promise<T>
   ): Promise<T> {
-    const key = uri.toString();
+    const key = uri.scheme === "file" ? uri.toString().toLowerCase() : uri.toString();
     const prior = this.writeQueues.get(key) ?? Promise.resolve();
     const result = prior.catch(() => undefined).then(operation);
     const completion = result.then(
@@ -752,7 +861,8 @@ export class NewsletterOutputSession {
         batch.items,
         batch.hasMore,
         target.folder,
-        write
+        write,
+        token
       );
       generation.markBatchPersisted(targetKey, write);
       this.manager.setProposalDiscardHandler(this.proposalId, () =>
@@ -786,7 +896,8 @@ export class NewsletterOutputSession {
       target.uri,
       section,
       html,
-      target.folder
+      target.folder,
+      token
     );
   }
 
@@ -939,7 +1050,8 @@ function isSafeNewsletterFileName(fileName: string): boolean {
   return (
     fileName.length > 5 &&
     fileName.length <= 128 &&
-    /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.html$/i.test(fileName)
+    /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.html$/i.test(fileName) &&
+    !/^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(fileName)
   );
 }
 
@@ -1069,7 +1181,7 @@ async function readOptionalTextFile(
   uri: vscode.Uri
 ): Promise<string | undefined> {
   const openDocument = vscode.workspace.textDocuments.find(
-    (document) => document.uri.toString() === uri.toString()
+    (document) => sameUriLocation(document.uri, uri)
   );
   if (openDocument) {
     return openDocument.getText();

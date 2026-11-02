@@ -25,6 +25,7 @@ import {
 } from "./participant.js";
 import { registerNewsletterLanguageModelTools } from "./toolRegistry";
 import { resolveLmToolName } from "./lmToolBridge";
+import { NewsletterWorkflowRuntime, SHOW_WORKFLOW_STATUS_COMMAND } from "./workflowRuntime.js";
 
 const CHECK_PLAYWRIGHT_MCP_STATUS_COMMAND =
   "aviators.checkPlaywrightMcpStatus";
@@ -33,8 +34,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const mcpProvider = new AviatorsMcpServerDefinitionProvider(context);
   const linkedInSessionCommands = new LinkedInSessionCommands(context);
   const outputManager = new NewsletterOutputManager();
-  const languageModelTools = registerNewsletterLanguageModelTools();
-  const handler = createNewsletterChatRequestHandler(outputManager);
+  const workflow = new NewsletterWorkflowRuntime(outputManager);
+  const languageModelTools = registerNewsletterLanguageModelTools(workflow);
+  const handler = createNewsletterChatRequestHandler(outputManager, workflow);
 
   const participant = vscode.chat.createChatParticipant(
     NEWSLETTER_PARTICIPANT_ID,
@@ -57,10 +59,8 @@ export function activate(context: vscode.ExtensionContext): void {
     REVIEW_NEWSLETTER_CHANGES_COMMAND,
     async (proposalId?: unknown) => {
       try {
-        if (typeof proposalId !== "string") {
-          throw new Error("The newsletter proposal identifier is invalid.");
-        }
-        await outputManager.reviewProposal(proposalId);
+        const selected = await outputManager.selectProposal(proposalId);
+        if (selected) await outputManager.reviewProposal(selected);
       } catch (error) {
         await vscode.window.showErrorMessage(
           error instanceof Error ? error.message : String(error)
@@ -72,12 +72,11 @@ export function activate(context: vscode.ExtensionContext): void {
     APPLY_NEWSLETTER_CHANGES_COMMAND,
     async (proposalId?: unknown) => {
       try {
-        if (typeof proposalId !== "string") {
-          throw new Error("The newsletter proposal identifier is invalid.");
-        }
-        const uri = await outputManager.applyProposal(proposalId);
+        const selected = await outputManager.selectProposal(proposalId);
+        if (!selected) return;
+        const uri = await outputManager.applyProposal(selected);
         await vscode.window.showInformationMessage(
-          `Applied Aviators changes to ${uri.fsPath}.`
+          `Applied and saved Aviators changes to ${uri.fsPath}.`
         );
       } catch (error) {
         await vscode.window.showErrorMessage(
@@ -90,10 +89,9 @@ export function activate(context: vscode.ExtensionContext): void {
     DISCARD_NEWSLETTER_CHANGES_COMMAND,
     async (proposalId?: unknown) => {
       try {
-        if (typeof proposalId !== "string") {
-          throw new Error("The newsletter proposal identifier is invalid.");
-        }
-        outputManager.discardProposal(proposalId);
+        const selected = await outputManager.selectProposal(proposalId);
+        if (!selected) return;
+        outputManager.discardProposal(selected);
         await vscode.window.showInformationMessage(
           "Discarded the proposed Aviators newsletter changes."
         );
@@ -109,6 +107,15 @@ export function activate(context: vscode.ExtensionContext): void {
       NEWSLETTER_PROPOSAL_SCHEME,
       outputManager
     );
+  const workflowStatusCommand = vscode.commands.registerCommand(
+    SHOW_WORKFLOW_STATUS_COMMAND,
+    async (workflowId?: unknown) => {
+      try { await workflow.showStatus(workflowId); }
+      catch (error) {
+        await vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      }
+    }
+  );
   const setEmailApiKeyCommand = vscode.commands.registerCommand("aviators.setEmailApiKey", async () => {
     const apiKey = await vscode.window.showInputBox({
       title: "Aviators: Set Email API Key",
@@ -176,6 +183,7 @@ export function activate(context: vscode.ExtensionContext): void {
     applyNewsletterChangesCommand,
     discardNewsletterChangesCommand,
     proposalContentProvider,
+    workflowStatusCommand,
     setEmailApiKeyCommand,
     signInToLinkedInCommand,
     checkLinkedInSessionStatusCommand,

@@ -2,7 +2,7 @@
   "name": "aviators-newsletter",
   "displayName": "Aviators Newsletter",
   "description": "Build Logic Apps Aviators newsletters with GitHub Copilot.",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "publisher": "aviators",
   "icon": "images/icon.png",
   "license": "MIT",
@@ -20,6 +20,12 @@
   "main": "./dist/extension.cjs",
   "activationEvents": [
     "onChatParticipant:aviators.newsletter",
+    "onLanguageModelTool:aviators_beginNewsletterWorkflow",
+    "onLanguageModelTool:aviators_createNewsletterTemplate",
+    "onLanguageModelTool:aviators_getNewsletterWorkflow",
+    "onLanguageModelTool:aviators_reviewNewsletterWorkflow",
+    "onLanguageModelTool:aviators_persistNewsletterDraft",
+    "onLanguageModelTool:aviators_openNewsletterPreview",
     "onLanguageModelTool:aviators_computeDateWindow",
     "onLanguageModelTool:aviators_createAceAviator",
     "onLanguageModelTool:aviators_createProductGroupNews",
@@ -34,6 +40,10 @@
     "onCommand:aviators.signInToLinkedIn",
     "onCommand:aviators.checkLinkedInSessionStatus",
     "onCommand:aviators.checkPlaywrightMcpStatus",
+    "onCommand:aviators.reviewNewsletterChanges",
+    "onCommand:aviators.applyNewsletterChanges",
+    "onCommand:aviators.discardNewsletterChanges",
+    "onCommand:aviators.showNewsletterWorkflowStatus",
     "onMcpServerDefinitionProvider:aviators.newsletter"
   ],
   "contributes": {
@@ -70,6 +80,153 @@
     ],
     "languageModelTools": [
       {
+        "name": "aviators_beginNewsletterWorkflow",
+        "displayName": "Begin Newsletter Workflow",
+        "modelDescription": "Begin an explicit target-bound newsletter workflow. Preserve the target's accumulated pending draft when starting another section; unfinished workflows must be completed or explicitly discarded first. Select requested sections in Ace Aviator, Product Group, Community order. Return workflowId for section builders and LinkedIn scraping.",
+        "userDescription": "Select the newsletter target and start a reviewable section workflow.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "beginNewsletterWorkflow",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "month": {
+              "type": "string",
+              "description": "Newsletter month and year, such as November 2026."
+            },
+            "sections": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "aceAviator",
+                  "productGroup",
+                  "community"
+                ]
+              }
+            },
+            "fileName": {
+              "type": "string",
+              "description": "Optional HTML filename inside the configured newsletter output folder."
+            },
+            "workspaceFolder": {
+              "type": "string",
+              "description": "Optional URI of an open workspace folder; omit to use editor selection."
+            }
+          },
+          "required": [
+            "month",
+            "sections"
+          ]
+        }
+      },
+      {
+        "name": "aviators_createNewsletterTemplate",
+        "displayName": "Create or Open Newsletter Template",
+        "modelDescription": "Create a missing newsletter template or open the existing file without overwriting it. This does not generate sections or retrieve email or web content.",
+        "userDescription": "Create or open the template for a newsletter month.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "createNewsletterTemplate",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "month": {
+              "type": "string",
+              "description": "Newsletter month and year."
+            },
+            "fileName": {
+              "type": "string",
+              "description": "Optional HTML filename inside the configured output folder."
+            },
+            "workspaceFolder": {
+              "type": "string",
+              "description": "Optional URI of an open workspace folder."
+            }
+          },
+          "required": [
+            "month"
+          ]
+        }
+      },
+      {
+        "name": "aviators_getNewsletterWorkflow",
+        "displayName": "Get Newsletter Workflow Status",
+        "modelDescription": "Read trusted progress for a previously started newsletter workflow. Check pending Community batches, remaining URLs, staged sections and proposal status before reporting completion or continuing. Staged changes are not applied or saved.",
+        "userDescription": "Inspect section progress and pending newsletter changes.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "getNewsletterWorkflow",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workflowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workflowId"
+          ]
+        }
+      },
+      {
+        "name": "aviators_reviewNewsletterWorkflow",
+        "displayName": "Review Newsletter Workflow",
+        "modelDescription": "Open the complete accumulated draft diff for a newsletter. This never applies changes. Persist only after an explicit user request using persistNewsletterDraft or the Aviators apply command.",
+        "userDescription": "Review generated newsletter changes before applying them.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "reviewNewsletterWorkflow",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workflowId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workflowId"
+          ]
+        }
+      },
+      {
+        "name": "aviators_persistNewsletterDraft",
+        "displayName": "Persist Newsletter Draft",
+        "modelDescription": "Save all accumulated draft sections for one newsletter to disk, only when the user explicitly requests persistence. Optional workflowId selects its newsletter target, including later section changes. Without it, select the only pending draft or show a target picker for multiple drafts. Reject unfinished workflows, pending batches, stale handles and file/editor conflicts. Never call automatically after generation.",
+        "userDescription": "Persist the complete accumulated newsletter draft from chat.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "persistNewsletterDraft",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workflowId": {
+              "type": "string",
+              "description": "Optional existing workflow handle selecting a newsletter target. Saves its latest full draft, not only that workflow's section."
+            }
+          }
+        }
+      },
+      {
+        "name": "aviators_openNewsletterPreview",
+        "displayName": "Open Newsletter Preview",
+        "modelDescription": "Open an existing newsletter document in the editor. Supply workflowId to use that workflow target, or omit to select an existing newsletter. Pending proposals must be reviewed through reviewNewsletterWorkflow.",
+        "userDescription": "Open an existing newsletter HTML document.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "openNewsletterPreview",
+        "inputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workflowId": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
         "name": "aviators_computeDateWindow",
         "displayName": "Compute Newsletter Date Window",
         "modelDescription": "Compute PST newsletter window for a given Month. Returns startPST (first Tuesday of previous month at 00:00) and endPST (first Sunday of current month at 23:59).",
@@ -99,6 +256,10 @@
         "inputSchema": {
           "type": "object",
           "properties": {
+            "workflowId": {
+              "type": "string",
+              "description": "Workflow handle returned by beginNewsletterWorkflow. Required in the plugin workflow to stage reviewable output; omitted calls return standalone HTML only."
+            },
             "month": {
               "type": "string",
               "description": "Month for the newsletter, e.g., \"February 2026\""
@@ -151,6 +312,10 @@
         "inputSchema": {
           "type": "object",
           "properties": {
+            "workflowId": {
+              "type": "string",
+              "description": "Workflow handle returned by beginNewsletterWorkflow; pass it to stage reviewable Product Group output."
+            },
             "month": {
               "type": "string",
               "description": "Month for the newsletter, e.g., \"February 2026\""
@@ -207,7 +372,7 @@
       {
         "name": "aviators_createCommunityNews",
         "displayName": "Create Community News",
-        "modelDescription": "Build one escaped Community News batch from processed LinkedIn activity data. REQUIRES actual scraped data from scrapeLinkedIn - do NOT pass fabricated data or prior newsletter HTML. In an Aviators participant generation, the extension replaces stale Community output with the first batch and accumulates later batches, including trusted cross-request resumes.",
+        "modelDescription": "Build one escaped Community News batch from processed LinkedIn activity data. REQUIRES actual scraped data from scrapeLinkedIn - do NOT pass fabricated data or prior newsletter HTML. Pass workflowId in Copilot plugin workflows for trusted first-batch replacement, continuation accumulation, and reviewable output.",
         "userDescription": "Generate one safe Community News batch from real scraped activity data.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "createCommunityNews",
@@ -215,6 +380,10 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "workflowId": {
+              "type": "string",
+              "description": "Workflow handle used by scrapeLinkedIn. Keep the same handle for all batches and continuations."
+            },
             "items": {
               "type": "array",
               "description": "Array of community items with externalLink, title, authorProfile, authorName, and summary. Data MUST come from scrapeLinkedIn results.",
@@ -287,13 +456,17 @@
       {
         "name": "aviators_scrapeLinkedIn",
         "displayName": "Scrape LinkedIn Activity",
-        "modelDescription": "Scrape LinkedIn activity URLs in batches. Processes up to batchSize (default 3) URLs per call. When hasMore is true in the response, call again with the remainingUrls, then pass each processed batch to createCommunityNews. The participant replaces stale Community output on a generation's first batch and accumulates continuation batches across trusted resumes.",
+        "modelDescription": "Scrape LinkedIn activity URLs in batches. Processes up to batchSize (default 3) URLs per call. Pass workflowId in Copilot plugin workflows to track trusted progress. Process and stage each batch before calling again with remainingUrls; keep the same workflowId for continuation.",
         "userDescription": "Visit LinkedIn activity URLs in batches and return page content for Community News.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "scrapeLinkedIn",
         "inputSchema": {
           "type": "object",
           "properties": {
+            "workflowId": {
+              "type": "string",
+              "description": "Workflow handle returned by beginNewsletterWorkflow, required for trusted plugin batch tracking."
+            },
             "urls": {
               "type": "array",
               "items": {
@@ -402,6 +575,22 @@
     ],
     "commands": [
       {
+        "command": "aviators.reviewNewsletterChanges",
+        "title": "Aviators: Review Pending Newsletter Changes"
+      },
+      {
+        "command": "aviators.applyNewsletterChanges",
+        "title": "Aviators: Apply Pending Newsletter Changes"
+      },
+      {
+        "command": "aviators.discardNewsletterChanges",
+        "title": "Aviators: Discard Pending Newsletter Changes"
+      },
+      {
+        "command": "aviators.showNewsletterWorkflowStatus",
+        "title": "Aviators: Show Newsletter Workflow Status"
+      },
+      {
         "command": "aviators.openPreview",
         "title": "Aviators: Open Current Newsletter Preview"
       },
@@ -478,7 +667,7 @@
           "default": 12,
           "minimum": 1,
           "maximum": 50,
-          "description": "Maximum number of model tool-call rounds allowed for one request."
+          "description": "Maximum model tool-call rounds for the temporary Local-harness participant only. This does not limit the Copilot harness."
         },
         "aviators.newsletter.enableMcpProvider": {
           "type": "boolean",
@@ -496,11 +685,13 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc --noEmit && node esbuild.mjs",
+    "compile": "tsc --noEmit && node esbuild.mjs && node scripts/build-plugin.mjs --prepare",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package --no-dependencies",
     "package:version": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-vsix.ps1 -Version",
-    "test": "npm run test:compile && node out/test/run.js",
+    "package:plugin": "node scripts/build-plugin.mjs",
+    "test": "npm run test:compile && node out/test/run.js && npm run test:plugin",
+    "test:plugin": "node scripts/build-plugin.mjs --prepare && node test/pluginContracts.test.mjs",
     "test:compile": "tsc -p tsconfig.test.json",
     "lint": "eslint ."
   },

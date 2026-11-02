@@ -34,6 +34,7 @@ if ($buildVersion -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
 }
 
 $outputPath = Join-Path $releaseDir "aviators-newsletter-$buildVersion.vsix"
+$pluginOutputPath = Join-Path $releaseDir "aviators-newsletter-plugin-$buildVersion.tar.gz"
 
 Write-Host '=== Aviators Newsletter VSIX Builder ===' -ForegroundColor Cyan
 Write-Host "Version: $buildVersion" -ForegroundColor Gray
@@ -73,6 +74,11 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw 'VSIX packaging failed.'
         }
+
+        npm run package:plugin
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Plugin packaging failed.'
+        }
     } finally {
         Pop-Location
     }
@@ -81,6 +87,7 @@ try {
     Write-Host ''
     Write-Host '=== Build complete ===' -ForegroundColor Green
     Write-Host "VSIX: $($vsix.FullName)" -ForegroundColor Green
+    Write-Host "Plugin: $pluginOutputPath" -ForegroundColor Green
     Write-Host "Install: code --install-extension `"$($vsix.FullName)`"" -ForegroundColor Cyan
 } finally {
     Set-Content -LiteralPath $packageJsonPath -Value $originalPackageJson -NoNewline

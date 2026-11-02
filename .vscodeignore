@@ -8,6 +8,8 @@ src/**
 test/**
 out/**
 dist/*.map
+dist/plugin/**
+plugin/**
 scripts/**
 release/**
 node_modules/**
